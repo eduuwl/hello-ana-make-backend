@@ -18,7 +18,7 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-export function toCartResponse(cart: CartWithItems, variantsById: Map<string, ProductVariantModel>) {
+export function buildCartItems(cart: CartWithItems, variantsById: Map<string, ProductVariantModel>) {
   const items = cart.items.map((item) => {
     const variant = variantsById.get(item.variantId);
     const liveStock = variant?.stock ?? 0;
@@ -48,9 +48,24 @@ export function toCartResponse(cart: CartWithItems, variantsById: Map<string, Pr
   });
 
   const subtotal = round2(items.reduce((sum, i) => sum + i.lineTotal, 0));
-  // Cupom (05-cupons.md) e frete (08-frete.md) ainda não implementados — desconto/frete fixos em 0.
-  const discount = 0;
-  const shipping = 0;
+  return { items, subtotal };
+}
+
+export interface CartTotalsInput {
+  cart: CartWithItems;
+  items: ReturnType<typeof buildCartItems>['items'];
+  subtotal: number;
+  discount: number;
+  shipping: number;
+  couponCode?: string;
+  freeShipping: boolean;
+  couponMessage?: string;
+}
+
+/** docs/04-carrinho.md → total = max(0, subtotal - discount + shipping + tax); tax reservado em 0. */
+export function toCartResponse(input: CartTotalsInput) {
+  const { cart, items, subtotal, discount, couponCode, freeShipping, couponMessage } = input;
+  const shipping = freeShipping ? 0 : input.shipping;
   const tax = 0;
   const total = Math.max(0, round2(subtotal - discount + shipping + tax));
   const itemCount = items.reduce((sum, i) => sum + i.quantity, 0);
@@ -67,7 +82,11 @@ export function toCartResponse(cart: CartWithItems, variantsById: Map<string, Pr
       itemCount,
       currency: 'BRL',
     },
-    couponCode: cart.couponCode ?? undefined,
+    couponCode,
+    freeShipping,
+    couponMessage,
+    rewardEligibleAmount: round2(Math.max(0, subtotal - discount)),
+    shippingOptionId: cart.shippingOptionId ?? undefined,
     updatedAt: cart.updatedAt.toISOString(),
   };
 }

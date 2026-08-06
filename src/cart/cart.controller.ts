@@ -1,9 +1,11 @@
-import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Put, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { CartService } from './cart.service';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
 import { OptionalAuthService } from '../common/auth/optional-auth.service';
+import { ApplyCouponDto } from '../coupons/dto/apply-coupon.dto';
+import { SelectShippingDto } from '../shipping/dto/select-shipping.dto';
 
 @Controller('cart')
 export class CartController {
@@ -53,5 +55,31 @@ export class CartController {
   async clear(@Req() req: Request, @Headers('x-cart-id') cartId?: string) {
     const user = await this.optionalAuth.getUserFromRequest(req);
     return this.cartService.clear(user, cartId);
+  }
+
+  @Post('coupon')
+  async applyCoupon(
+    @Req() req: Request,
+    @Body() dto: ApplyCouponDto,
+    @Headers('x-cart-id') cartId?: string,
+  ) {
+    const user = await this.optionalAuth.getUserFromRequest(req);
+    return this.cartService.applyCoupon(user, cartId, dto.code);
+  }
+
+  @Delete('coupon')
+  async removeCoupon(@Req() req: Request, @Headers('x-cart-id') cartId?: string) {
+    const user = await this.optionalAuth.getUserFromRequest(req);
+    return this.cartService.removeCoupon(user, cartId);
+  }
+
+  @Put('shipping')
+  async selectShipping(
+    @Req() req: Request,
+    @Body() dto: SelectShippingDto,
+    @Headers('x-cart-id') cartId?: string,
+  ) {
+    const user = await this.optionalAuth.getUserFromRequest(req);
+    return this.cartService.selectShipping(user, cartId, dto);
   }
 }

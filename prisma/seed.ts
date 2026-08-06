@@ -194,6 +194,53 @@ async function main() {
     });
   }
 
+  await prisma.coupon.upsert({
+    where: { code: 'BEMVINDA10' },
+    update: {},
+    create: {
+      code: 'BEMVINDA10',
+      type: 'percentage',
+      value: 10,
+      description: '10% de desconto na primeira compra',
+      minOrderValue: 50,
+      maxDiscountValue: 50,
+      firstPurchaseOnly: true,
+      perUserLimit: 1,
+      startsAt: new Date('2025-01-01T00:00:00.000Z'),
+      endsAt: new Date('2027-12-31T23:59:59.000Z'),
+    },
+  });
+
+  await prisma.coupon.upsert({
+    where: { code: 'ANA15' },
+    update: {},
+    create: {
+      code: 'ANA15',
+      type: 'percentage',
+      value: 15,
+      description: '15% de desconto Hello Ana',
+      minOrderValue: 80,
+      maxDiscountValue: 80,
+      usageLimit: 500,
+      perUserLimit: 1,
+      startsAt: new Date('2025-01-01T00:00:00.000Z'),
+      endsAt: new Date('2027-06-30T23:59:59.000Z'),
+    },
+  });
+
+  await prisma.coupon.upsert({
+    where: { code: 'FRETEGRATIS' },
+    update: {},
+    create: {
+      code: 'FRETEGRATIS',
+      type: 'free_shipping',
+      value: 0,
+      description: 'Frete grátis',
+      startsAt: new Date('2025-01-01T00:00:00.000Z'),
+      endsAt: new Date('2027-12-31T23:59:59.000Z'),
+    },
+  });
+
   // eslint-disable-next-line no-console
   console.log('Seed concluído: admin@helloanamake.com / admin123 · ana.silva@email.com / helloana123');
 }

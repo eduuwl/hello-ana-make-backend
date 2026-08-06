@@ -50,8 +50,9 @@ model User {
   resetPasswordTokenHash String?
   resetPasswordExpiresAt DateTime?
 
-  addresses Address[]
-  cart      Cart?
+  addresses         Address[]
+  cart              Cart?
+  couponRedemptions CouponRedemption[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -89,6 +90,11 @@ model Cart {
   couponCode String?
   items      CartItem[]
 
+  // Opção de frete escolhida (08-frete.md); o preço é o cotado no momento da seleção,
+  // recotar tem TTL curto sugerido no doc — não implementado aqui ainda.
+  shippingOptionId String?
+  shippingPrice    Decimal? @db.Decimal(10, 2)
+
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
 
@@ -120,6 +126,54 @@ model CartItem {
 
   @@unique([cartId, variantId])
   @@map("cart_items")
+}
+
+enum CouponType {
+  percentage
+  fixed_amount
+  free_shipping
+  category
+  product
+}
+
+model Coupon {
+  id                String     @id @default(uuid())
+  code              String     @unique
+  type              CouponType
+  value             Decimal    @db.Decimal(10, 2)
+  description       String?
+  categoryIds       String[]   @default([])
+  productIds        String[]   @default([])
+  minOrderValue     Decimal?   @db.Decimal(10, 2)
+  maxDiscountValue  Decimal?   @db.Decimal(10, 2)
+  usageLimit        Int?
+  usageCount        Int        @default(0)
+  perUserLimit      Int?
+  firstPurchaseOnly Boolean    @default(false)
+  startsAt          DateTime
+  endsAt            DateTime
+  isActive          Boolean    @default(true)
+
+  redemptions CouponRedemption[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("coupons")
+}
+
+// Registrado quando um pedido pago consome o cupom (docs/05-cupons.md → "Consumo do uso").
+model CouponRedemption {
+  id       String  @id @default(uuid())
+  couponId String
+  coupon   Coupon  @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId  String?
+
+  createdAt DateTime @default(now())
+
+  @@map("coupon_redemptions")
 }
 
 model Category {

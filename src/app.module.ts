@@ -7,6 +7,8 @@ import { BrandsModule } from './brands/brands.module';
 import { ProductsModule } from './products/products.module';
 import { AddressesModule } from './addresses/addresses.module';
 import { CartModule } from './cart/cart.module';
+import { CouponsModule } from './coupons/coupons.module';
+import { ShippingModule } from './shipping/shipping.module';
 
 @Module({
   imports: [
@@ -17,6 +19,8 @@ import { CartModule } from './cart/cart.module';
     BrandsModule,
     ProductsModule,
     AddressesModule,
+    CouponsModule,
+    ShippingModule,
     CartModule,
   ],
 })

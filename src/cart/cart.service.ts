@@ -5,17 +5,35 @@ import { ApiException } from '../common/exceptions/api.exception';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
-import { toCartResponse, CartWithItems } from './mappers/cart.mapper';
+import { toCartResponse, buildCartItems, CartWithItems } from './mappers/cart.mapper';
+import { CouponsService, CouponValidationStatus } from '../coupons/coupons.service';
+import { ShippingService } from '../shipping/shipping.service';
+import { SelectShippingDto } from '../shipping/dto/select-shipping.dto';
 
 const STORE_MAX_QTY = 10;
 
+const COUPON_ERROR_CODES: Partial<Record<CouponValidationStatus, string>> = {
+  invalid: 'COUPON_INVALID',
+  expired: 'COUPON_EXPIRED',
+  inactive: 'COUPON_INACTIVE',
+  min_order_not_met: 'COUPON_MIN_ORDER',
+  not_started: 'COUPON_NOT_STARTED',
+  usage_limit_reached: 'COUPON_USAGE_LIMIT_REACHED',
+  not_applicable: 'COUPON_NOT_APPLICABLE',
+  already_used: 'COUPON_ALREADY_USED',
+};
+
 @Injectable()
 export class CartService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly couponsService: CouponsService,
+    private readonly shippingService: ShippingService,
+  ) {}
 
   async getCart(user: AuthenticatedUser | null, cartIdHeader?: string) {
     const cart = await this.resolveCart(user, cartIdHeader);
-    return this.toResponse(cart);
+    return this.toResponse(cart, user);
   }
 
   async addItem(user: AuthenticatedUser | null, cartIdHeader: string | undefined, dto: AddCartItemDto) {
@@ -62,7 +80,7 @@ export class CartService {
     }
 
     await this.touchCart(cart.id);
-    return this.toResponse(await this.getCartOrThrow(cart.id));
+    return this.toResponse(await this.getCartOrThrow(cart.id), user);
   }
 
   async updateItemQuantity(
@@ -85,7 +103,7 @@ export class CartService {
 
     await this.prisma.cartItem.update({ where: { id: itemId }, data: { quantity: dto.quantity } });
     await this.touchCart(cart.id);
-    return this.toResponse(await this.getCartOrThrow(cart.id));
+    return this.toResponse(await this.getCartOrThrow(cart.id), user);
   }
 
   async removeItem(user: AuthenticatedUser | null, cartIdHeader: string | undefined, itemId: string) {
@@ -96,14 +114,66 @@ export class CartService {
     }
     await this.prisma.cartItem.delete({ where: { id: itemId } });
     await this.touchCart(cart.id);
-    return this.toResponse(await this.getCartOrThrow(cart.id));
+    return this.toResponse(await this.getCartOrThrow(cart.id), user);
   }
 
   async clear(user: AuthenticatedUser | null, cartIdHeader?: string) {
     const cart = await this.resolveCart(user, cartIdHeader);
     await this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
+    await this.prisma.cart.update({
+      where: { id: cart.id },
+      data: { couponCode: null, shippingOptionId: null, shippingPrice: null },
+    });
+    return this.toResponse(await this.getCartOrThrow(cart.id), user);
+  }
+
+  async applyCoupon(user: AuthenticatedUser | null, cartIdHeader: string | undefined, code: string) {
+    const cart = await this.resolveCart(user, cartIdHeader);
+    const { subtotal, lines } = await this.computeSubtotalAndLines(cart);
+
+    if (subtotal <= 0) {
+      throw new ValidationApiException({ code: ['O carrinho está vazio.'] });
+    }
+
+    const validation = await this.couponsService.validate({
+      code,
+      userId: user?.id ?? null,
+      cartSubtotal: subtotal,
+      productIds: lines.map((l) => l.productId),
+      categoryIds: lines.map((l) => l.categoryId),
+      lines,
+    });
+
+    if (validation.status !== 'valid') {
+      throw new ApiException(validation.message, COUPON_ERROR_CODES[validation.status] ?? 'COUPON_INVALID', 422);
+    }
+
+    await this.prisma.cart.update({
+      where: { id: cart.id },
+      data: { couponCode: validation.coupon?.code },
+    });
+
+    const response = await this.toResponse(await this.getCartOrThrow(cart.id), user);
+    return { cart: response, validation };
+  }
+
+  async removeCoupon(user: AuthenticatedUser | null, cartIdHeader?: string) {
+    const cart = await this.resolveCart(user, cartIdHeader);
     await this.prisma.cart.update({ where: { id: cart.id }, data: { couponCode: null } });
-    return this.toResponse(await this.getCartOrThrow(cart.id));
+    return this.toResponse(await this.getCartOrThrow(cart.id), user);
+  }
+
+  async selectShipping(user: AuthenticatedUser | null, cartIdHeader: string | undefined, dto: SelectShippingDto) {
+    const cart = await this.resolveCart(user, cartIdHeader);
+    const { subtotal } = await this.computeSubtotalAndLines(cart);
+    const price = this.shippingService.priceFor(dto.shippingOptionId, subtotal);
+
+    await this.prisma.cart.update({
+      where: { id: cart.id },
+      data: { shippingOptionId: dto.shippingOptionId, shippingPrice: price },
+    });
+
+    return this.toResponse(await this.getCartOrThrow(cart.id), user);
   }
 
   private async getCartOrThrow(id: string): Promise<CartWithItems> {
@@ -116,13 +186,74 @@ export class CartService {
     await this.prisma.cart.update({ where: { id }, data: { updatedAt: new Date() } });
   }
 
-  private async toResponse(cart: CartWithItems) {
+  private async computeSubtotalAndLines(cart: CartWithItems) {
     const variantIds = cart.items.map((i) => i.variantId);
     const variants = variantIds.length
       ? await this.prisma.productVariant.findMany({ where: { id: { in: variantIds } } })
       : [];
     const variantsById = new Map(variants.map((v) => [v.id, v]));
-    return toCartResponse(cart, variantsById);
+    const { items, subtotal } = buildCartItems(cart, variantsById);
+
+    const productIds = [...new Set(items.map((i) => i.productId))];
+    const products = productIds.length
+      ? await this.prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, categoryId: true } })
+      : [];
+    const categoryByProduct = new Map(products.map((p) => [p.id, p.categoryId]));
+
+    const lines = items.map((item) => ({
+      productId: item.productId,
+      categoryId: categoryByProduct.get(item.productId) ?? '',
+      lineTotal: item.lineTotal,
+    }));
+
+    return { items, subtotal, lines };
+  }
+
+  /**
+   * Recalcula cupom (auto-remove se deixou de ser válido — ex.: subtotal caiu abaixo do
+   * mínimo) e resolve o preço de frete já cotado. docs/04-carrinho.md → campos extras sugeridos.
+   */
+  private async toResponse(cart: CartWithItems, user: AuthenticatedUser | null) {
+    const { items, subtotal, lines } = await this.computeSubtotalAndLines(cart);
+
+    let discount = 0;
+    let freeShipping = false;
+    let couponCode: string | undefined = cart.couponCode ?? undefined;
+    let couponMessage: string | undefined;
+
+    if (couponCode) {
+      const validation = await this.couponsService.validate({
+        code: couponCode,
+        userId: user?.id ?? null,
+        cartSubtotal: subtotal,
+        productIds: lines.map((l) => l.productId),
+        categoryIds: lines.map((l) => l.categoryId),
+        lines,
+      });
+
+      if (validation.status === 'valid') {
+        discount = validation.discountAmount;
+        freeShipping = validation.coupon?.type === 'free_shipping';
+        couponMessage = validation.message;
+      } else {
+        // Cupom deixou de valer (ex.: carrinho mudou) — solta ele do carrinho.
+        await this.prisma.cart.update({ where: { id: cart.id }, data: { couponCode: null } });
+        couponCode = undefined;
+      }
+    }
+
+    const shipping = cart.shippingPrice !== null ? Number(cart.shippingPrice) : 0;
+
+    return toCartResponse({
+      cart,
+      items,
+      subtotal,
+      discount,
+      shipping,
+      couponCode,
+      freeShipping,
+      couponMessage,
+    });
   }
 
   /**

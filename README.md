@@ -18,18 +18,20 @@ Fase 1 (catálogo + auth), conforme os docs do frontend:
 | Marcas | `03-marcas.md` | ✅ público + admin CRUD |
 | Produtos | `01-produtos.md` | ✅ listagem com filtros/ordenação, detalhe, relacionados + admin CRUD |
 | Endereços | `12-enderecos.md` | ✅ CRUD completo + regra de endereço default |
-| Carrinho | `04-carrinho.md` | ✅ guest via `X-Cart-Id`, merge no login, totais · ⏳ cupom/frete (dependem desses domínios) |
-| Admin (parcial) | `14-admin.md` | ✅ CRUD de produtos/categorias/marcas · ⏳ dashboard, pedidos, uploads |
+| Cupons | `05-cupons.md` | ✅ validação completa (9 passos), aplicar/remover no carrinho, admin CRUD |
+| Frete | `08-frete.md` | ✅ cotação mock PAC/SEDEX/EXPRESSA, seleção no carrinho · ⏳ tracking/shipment (depende de Pedidos) |
+| Carrinho | `04-carrinho.md` | ✅ guest via `X-Cart-Id`, merge no login, cupom, frete, totais completos |
+| Admin (parcial) | `14-admin.md` | ✅ CRUD de produtos/categorias/marcas/cupons · ⏳ dashboard, pedidos, uploads |
 
-**Ainda não implementado** (próximas fases — ver "Como continuar" abaixo): cupons, promoções,
-recompensas, frete, checkout/pedidos, pagamentos, favoritos, configurações da loja, dashboard
-admin, upload de imagens.
+**Ainda não implementado** (próximas fases — ver "Como continuar" abaixo): promoções, recompensas,
+checkout/pedidos, pagamentos, favoritos, configurações da loja, dashboard admin, upload de imagens.
 
 ---
 
 ## Stack
 
-- **NestJS 10** (TypeScript) — módulos: `auth`, `categories`, `brands`, `products`
+- **NestJS 10** (TypeScript) — módulos: `auth`, `categories`, `brands`, `products`, `addresses`,
+  `coupons`, `shipping`, `cart`
 - **Prisma 5** como ORM, schema em `prisma/schema.prisma`
 - **PostgreSQL** (Neon em produção; qualquer Postgres local também funciona)
 - **JWT** (access + refresh) via `@nestjs/jwt` + `passport-jwt`
@@ -81,6 +83,9 @@ Usuários de teste criados pelo seed:
 |---|---|---|
 | `admin@helloanamake.com` | `admin123` | admin |
 | `ana.silva@email.com` | `helloana123` | customer |
+
+Cupons de teste criados pelo seed: `BEMVINDA10` (10%, só 1ª compra, mín. R$50),
+`ANA15` (15%, mín. R$80), `FRETEGRATIS` (zera o frete do carrinho).
 
 ### 4. Subir a API
 
@@ -147,6 +152,23 @@ no Render (ex.: `https://hello-ana-make-backend.onrender.com/api`) e `NEXT_PUBLI
 - **Reviews/promoções/favoritos no produto**: `rating` vem de colunas simples no `Product`
   (sem tabela de reviews ainda); `isFavorite` sempre retorna `false` (módulo de Favoritos não
   implementado); `product.promotion` (campanhas do domínio Promoções) ainda não é populado.
+- **Consumo de cupom (`usageCount`/`already_used`)**: o schema já tem `CouponRedemption` e
+  `CouponsService.consume()` prontos, mas **ninguém chama `consume()` ainda** — só o domínio de
+  Pedidos/Pagamentos (quando existir) deve chamá-lo no webhook de pagamento confirmado, nunca na
+  criação do pedido (docs/05-cupons.md → "Consumo do uso"). Até lá, um cupom com `perUserLimit`
+  pode ser reaplicado livremente no carrinho, o que é esperado nesta fase.
+- **Cupom no carrinho é recalculado a cada leitura**: se o carrinho mudar (item removido, etc.) e o
+  cupom deixar de ser válido, ele é automaticamente removido no próximo `GET /cart` — não fica um
+  estado "quebrado" salvo (`cart.service.ts#toResponse`).
+- **`POST /coupons/validate` (standalone) vs. cupom aplicado no carrinho**: o endpoint standalone
+  recebe só `productIds`/`categoryIds` (sem valor por linha), então cupons `category`/`product`
+  usam o `cartSubtotal` inteiro como base ali; já `POST /cart/coupon` tem acesso às linhas reais do
+  carrinho e calcula o desconto só sobre os itens elegíveis, como o doc pede.
+- **Frete é stateless/mock**: `ShippingService` não tem tabela própria — as 3 opções (PAC/SEDEX/
+  Expressa) são uma constante no código, igual ao mock sugerido no doc. Integrar SuperFrete de
+  verdade é só trocar o corpo de `shipping.service.ts#quote`, a interface pública não muda.
+  `GET /shipping/tracking/{code}` e a criação de shipment (admin) ficam para quando o domínio de
+  Pedidos existir (precisam de um pedido para se referenciar).
 
 ---
 
@@ -154,18 +176,18 @@ no Render (ex.: `https://hello-ana-make-backend.onrender.com/api`) e `NEXT_PUBLI
 
 Cada um tem seu contrato detalhado em `hello-ana-make-frontend/docs/`:
 
-1. **Cupons** (`05-cupons.md`) e **Recompensas** (`07-recompensas.md`) — depois, plugar
-   `discount`/`rewardEligibleAmount` de volta no `CartService`/mapper do carrinho.
-2. **Frete** (`08-frete.md`) — abstrair `ShippingProvider`, stub local antes de integrar SuperFrete;
-   depois, plugar `shipping` de volta nos totais do carrinho.
-3. **Checkout/Pedidos** (`09-checkout-pedidos.md`) e **Pagamentos** (`10-pagamentos.md`).
+1. **Checkout/Pedidos** (`09-checkout-pedidos.md`) — maior peça que falta: cria `Order`/`OrderItem`
+   a partir do carrinho (snapshot de preços/endereço), reserva estoque, e é o ponto que deve chamar
+   `CouponsService.consume()` quando o pagamento confirmar.
+2. **Pagamentos** (`10-pagamentos.md`) — Pix/cartão/boleto gateway-agnostic; webhook marca o pedido
+   `paid` e dispara o consumo do cupom.
+3. **Recompensas** (`07-recompensas.md`) — tiers de brinde por valor; `rewardEligibleAmount` já
+   sai pronto no carrinho (`subtotal - discount`), só falta a tabela de tiers e o endpoint de
+   progresso.
 4. **Favoritos** (`13-favoritos.md`) — depois disso, atualizar `isFavorite` no mapper de produtos.
 5. **Promoções** (`06-promocoes.md`) — depois, popular `Product.promotion`.
 6. **Configurações da loja** (`15-configuracoes.md`) e restante do **Admin** (`14-admin.md`):
    dashboard, pedidos, upload de imagens.
-
-> O carrinho já está pronto para receber cupom/frete: `totals.discount` e `totals.shipping` estão
-> fixos em `0` em `cart.mapper.ts` só porque esses domínios ainda não existem — não é um bug.
 
 Padrões já estabelecidos para seguir nos próximos módulos: DTOs com `class-validator`, mapper
 `toXResponse` separado do service, exceptions via `src/common/exceptions`, paginação via
