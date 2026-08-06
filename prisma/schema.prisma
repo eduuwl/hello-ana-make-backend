@@ -1,0 +1,177 @@
+// Schema Prisma — Hello Ana Make API
+// Fase 1: Auth/clientes, Categorias, Marcas, Produtos (ver docs/*.md no frontend para o contrato completo).
+// Demais domínios (carrinho, cupons, promoções, recompensas, frete, pedidos, pagamentos, favoritos,
+// admin extra, configurações) entram em fases seguintes e vão crescer este schema.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  customer
+  admin
+}
+
+enum BadgeType {
+  new
+  bestseller
+  exclusive
+  limited
+  sale
+  eco
+  vegan
+  custom
+}
+
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  passwordHash    String
+  name            String
+  phone           String?
+  document        String?
+  avatarUrl       String?
+  birthDate       DateTime?
+  emailVerified   Boolean   @default(false)
+  acceptMarketing Boolean   @default(false)
+  role            Role      @default(customer)
+
+  // Sessão simples de refresh token (single-session). Evoluir para tabela de sessões
+  // por dispositivo quando o app precisar de múltiplos refresh tokens simultâneos.
+  refreshTokenHash      String?
+  refreshTokenExpiresAt DateTime?
+
+  resetPasswordTokenHash String?
+  resetPasswordExpiresAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Category {
+  id          String  @id @default(uuid())
+  slug        String  @unique
+  name        String
+  description String  @default("")
+  image       String  @default("")
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+
+  parentId String?
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryTree")
+
+  products Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("categories")
+}
+
+model Brand {
+  id          String  @id @default(uuid())
+  slug        String  @unique
+  name        String
+  description String?
+  logo        String?
+  website     String?
+  isActive    Boolean @default(true)
+
+  products Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("brands")
+}
+
+model Product {
+  id               String   @id @default(uuid())
+  slug             String   @unique
+  name             String
+  shortDescription String   @default("")
+  description      String   @default("")
+  ingredients      String?
+  howToUse         String?
+  benefits         String[] @default([])
+  technicalInfo    Json?
+
+  brandId String
+  brand   Brand  @relation(fields: [brandId], references: [id], onDelete: Restrict)
+
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  images   ProductImage[]
+  variants ProductVariant[]
+  badges   ProductBadge[]
+
+  ratingAverage Decimal @default(0) @db.Decimal(2, 1)
+  ratingCount   Int     @default(0)
+
+  isFeatured   Boolean @default(false)
+  isNew        Boolean @default(false)
+  isBestseller Boolean @default(false)
+  isActive     Boolean @default(true)
+
+  // Agregados desnormalizados a partir de `variants`, recalculados a cada create/update
+  // de produto (ver products.service.ts#recomputeAggregates). Evita joins/SQL bruto para
+  // ordenar e filtrar por preço/estoque na listagem pública.
+  totalStock        Int     @default(0)
+  minEffectivePrice Decimal @default(0) @db.Decimal(10, 2)
+  maxEffectivePrice Decimal @default(0) @db.Decimal(10, 2)
+  hasPromotion      Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("products")
+}
+
+model ProductImage {
+  id        String  @id @default(uuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  alt       String  @default("")
+  sortOrder Int     @default(0)
+  isPrimary Boolean @default(false)
+
+  @@map("product_images")
+}
+
+model ProductVariant {
+  id               String   @id @default(uuid())
+  productId        String
+  product          Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku              String   @unique
+  name             String
+  attributes       Json     @default("{}")
+  price            Decimal  @db.Decimal(10, 2)
+  promotionalPrice Decimal? @db.Decimal(10, 2)
+  stock            Int      @default(0)
+  image            String?
+  isAvailable      Boolean  @default(true)
+
+  @@map("product_variants")
+}
+
+model ProductBadge {
+  id        String    @id @default(uuid())
+  productId String
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  label     String
+  type      BadgeType
+  color     String?
+
+  @@map("product_badges")
+}
