@@ -17,11 +17,13 @@ Fase 1 (catálogo + auth), conforme os docs do frontend:
 | Categorias | `02-categorias.md` | ✅ público (flat/tree) + admin CRUD |
 | Marcas | `03-marcas.md` | ✅ público + admin CRUD |
 | Produtos | `01-produtos.md` | ✅ listagem com filtros/ordenação, detalhe, relacionados + admin CRUD |
+| Endereços | `12-enderecos.md` | ✅ CRUD completo + regra de endereço default |
+| Carrinho | `04-carrinho.md` | ✅ guest via `X-Cart-Id`, merge no login, totais · ⏳ cupom/frete (dependem desses domínios) |
 | Admin (parcial) | `14-admin.md` | ✅ CRUD de produtos/categorias/marcas · ⏳ dashboard, pedidos, uploads |
 
-**Ainda não implementado** (próximas fases — ver "Como continuar" abaixo): carrinho, cupons,
-promoções, recompensas, frete, checkout/pedidos, pagamentos, endereços, favoritos, configurações
-da loja, dashboard admin, upload de imagens.
+**Ainda não implementado** (próximas fases — ver "Como continuar" abaixo): cupons, promoções,
+recompensas, frete, checkout/pedidos, pagamentos, favoritos, configurações da loja, dashboard
+admin, upload de imagens.
 
 ---
 
@@ -152,15 +154,18 @@ no Render (ex.: `https://hello-ana-make-backend.onrender.com/api`) e `NEXT_PUBLI
 
 Cada um tem seu contrato detalhado em `hello-ana-make-frontend/docs/`:
 
-1. **Endereços** (`12-enderecos.md`) — CRUD simples, pré-requisito do checkout.
-2. **Carrinho** (`04-carrinho.md`) — guest via `X-Cart-Id` + merge no login.
-3. **Cupons** (`05-cupons.md`) e **Recompensas** (`07-recompensas.md`).
-4. **Frete** (`08-frete.md`) — abstrair `ShippingProvider`, stub local antes de integrar SuperFrete.
-5. **Checkout/Pedidos** (`09-checkout-pedidos.md`) e **Pagamentos** (`10-pagamentos.md`).
-6. **Favoritos** (`13-favoritos.md`) — depois disso, atualizar `isFavorite` no mapper de produtos.
-7. **Promoções** (`06-promocoes.md`) — depois, popular `Product.promotion`.
-8. **Configurações da loja** (`15-configuracoes.md`) e restante do **Admin** (`14-admin.md`):
+1. **Cupons** (`05-cupons.md`) e **Recompensas** (`07-recompensas.md`) — depois, plugar
+   `discount`/`rewardEligibleAmount` de volta no `CartService`/mapper do carrinho.
+2. **Frete** (`08-frete.md`) — abstrair `ShippingProvider`, stub local antes de integrar SuperFrete;
+   depois, plugar `shipping` de volta nos totais do carrinho.
+3. **Checkout/Pedidos** (`09-checkout-pedidos.md`) e **Pagamentos** (`10-pagamentos.md`).
+4. **Favoritos** (`13-favoritos.md`) — depois disso, atualizar `isFavorite` no mapper de produtos.
+5. **Promoções** (`06-promocoes.md`) — depois, popular `Product.promotion`.
+6. **Configurações da loja** (`15-configuracoes.md`) e restante do **Admin** (`14-admin.md`):
    dashboard, pedidos, upload de imagens.
+
+> O carrinho já está pronto para receber cupom/frete: `totals.discount` e `totals.shipping` estão
+> fixos em `0` em `cart.mapper.ts` só porque esses domínios ainda não existem — não é um bug.
 
 Padrões já estabelecidos para seguir nos próximos módulos: DTOs com `class-validator`, mapper
 `toXResponse` separado do service, exceptions via `src/common/exceptions`, paginação via

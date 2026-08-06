@@ -50,10 +50,76 @@ model User {
   resetPasswordTokenHash String?
   resetPasswordExpiresAt DateTime?
 
+  addresses Address[]
+  cart      Cart?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("users")
+}
+
+model Address {
+  id            String  @id @default(uuid())
+  userId        String
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label         String?
+  recipientName String
+  street        String
+  number        String
+  complement    String?
+  neighborhood  String
+  city          String
+  state         String
+  zipCode       String
+  country       String  @default("BR")
+  phone         String?
+  isDefault     Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("addresses")
+}
+
+model Cart {
+  id         String     @id @default(uuid())
+  userId     String?    @unique
+  user       User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  couponCode String?
+  items      CartItem[]
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@map("carts")
+}
+
+model CartItem {
+  id     String @id @default(uuid())
+  cartId String
+  cart   Cart   @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  productId   String
+  productSlug String
+  productName String
+  variantId   String
+  variantSku  String
+  variantName String
+  attributes  Json   @default("{}")
+  image       String
+
+  // Snapshot no momento em que o item foi adicionado (docs/04-carrinho.md).
+  // Revalidado/recalculado no checkout, não a cada GET.
+  unitPrice        Decimal  @db.Decimal(10, 2)
+  promotionalPrice Decimal? @db.Decimal(10, 2)
+  quantity         Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([cartId, variantId])
+  @@map("cart_items")
 }
 
 model Category {
