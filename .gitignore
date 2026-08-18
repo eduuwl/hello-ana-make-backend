@@ -22,3 +22,6 @@ yarn-error.log*
 # prisma
 prisma/dev.db
 prisma/dev.db-journal
+
+# uploads (disco local, docs/14-admin.md)
+/uploads

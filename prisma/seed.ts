@@ -1,5 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { DEFAULT_STORE_SETTINGS } from '../src/settings/settings.types';
 
 const prisma = new PrismaClient();
 
@@ -240,6 +241,71 @@ async function main() {
       endsAt: new Date('2027-12-31T23:59:59.000Z'),
     },
   });
+
+  // docs/07-recompensas.md → faixas padrão sugeridas.
+  const rewardTiersSeed = [
+    {
+      minimumAmount: 50,
+      sortOrder: 1,
+      rewardName: 'Mini Batom',
+      rewardDescription: 'Mini batom Ana Glow em tom surpresa',
+      rewardImage: 'https://picsum.photos/seed/mini-batom/400/400',
+    },
+    {
+      minimumAmount: 100,
+      sortOrder: 2,
+      rewardName: 'Gloss',
+      rewardDescription: 'Gloss exclusivo Hello Ana',
+      rewardImage: 'https://picsum.photos/seed/gloss/400/400',
+    },
+    {
+      minimumAmount: 150,
+      sortOrder: 3,
+      rewardName: 'Kit Skincare',
+      rewardDescription: 'Kit com amostras Skin Ritual',
+      rewardImage: 'https://picsum.photos/seed/kit-skincare/400/400',
+    },
+    {
+      minimumAmount: 250,
+      sortOrder: 4,
+      rewardName: 'Caixa Especial',
+      rewardDescription: 'Caixa especial Hello Ana com produtos selecionados',
+      rewardImage: 'https://picsum.photos/seed/caixa-especial/400/400',
+    },
+  ];
+  for (const tier of rewardTiersSeed) {
+    const existing = await prisma.rewardTier.findFirst({ where: { minimumAmount: tier.minimumAmount } });
+    if (!existing) {
+      await prisma.rewardTier.create({ data: { ...tier, isActive: true } });
+    }
+  }
+
+  await prisma.storeSettings.upsert({
+    where: { id: 'singleton' },
+    update: {},
+    create: { id: 'singleton', data: DEFAULT_STORE_SETTINGS as unknown as Prisma.InputJsonValue },
+  });
+
+  const batom = await prisma.product.findUnique({ where: { slug: 'batom-matte-rosa-nude' } });
+  if (batom) {
+    await prisma.promotion.upsert({
+      where: { slug: 'flash-sale-boca' },
+      update: {},
+      create: {
+        slug: 'flash-sale-boca',
+        name: 'Flash Sale Boca',
+        description: 'Até 20% off em produtos para boca por tempo limitado.',
+        type: 'flash_sale',
+        discountPercentage: 20,
+        productIds: [batom.id],
+        bannerImage: 'https://picsum.photos/seed/flash-sale-boca/1200/400',
+        startsAt: new Date('2025-01-01T00:00:00.000Z'),
+        endsAt: new Date('2027-12-31T23:59:59.000Z'),
+        isActive: true,
+        priority: 100,
+      },
+    });
+  }
 
   // eslint-disable-next-line no-console
   console.log('Seed concluído: admin@helloanamake.com / admin123 · ana.silva@email.com / helloana123');

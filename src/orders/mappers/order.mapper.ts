@@ -49,6 +49,16 @@ export function toOrderResponse(order: OrderWithItems) {
     trackingCode: order.trackingCode ?? undefined,
     trackingUrl: order.trackingUrl ?? undefined,
     notes: order.notes ?? undefined,
+    // docs/09-checkout-pedidos.md → "Campos extras sugeridos: rewardTierId, rewardGift snapshot."
+    rewardTierId: order.rewardTierId ?? undefined,
+    rewardGift: order.rewardTierId
+      ? {
+          id: order.rewardTierId,
+          name: order.rewardName ?? '',
+          description: order.rewardDescription ?? '',
+          image: order.rewardImage ?? '',
+        }
+      : undefined,
     createdAt: order.createdAt.toISOString(),
     updatedAt: order.updatedAt.toISOString(),
     paidAt: order.paidAt?.toISOString(),

@@ -4,13 +4,14 @@ import { PaymentsWebhookController } from './payments.webhook.controller';
 import { PaymentsService } from './payments.service';
 import { MockPaymentGateway } from './gateways/mock-payment.gateway';
 import { AsaasPaymentGateway } from './gateways/asaas-payment.gateway';
-import { paymentGatewayProvider } from './payments.gateway.provider';
+import { PaymentGatewayResolver } from './gateways/payment-gateway.resolver';
 import { CouponsModule } from '../coupons/coupons.module';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
-  imports: [CouponsModule],
+  imports: [CouponsModule, SettingsModule],
   controllers: [PaymentsController, PaymentsWebhookController],
-  providers: [PaymentsService, MockPaymentGateway, AsaasPaymentGateway, paymentGatewayProvider],
+  providers: [PaymentsService, MockPaymentGateway, AsaasPaymentGateway, PaymentGatewayResolver],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

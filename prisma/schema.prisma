@@ -90,6 +90,7 @@ model User {
   cart              Cart?
   couponRedemptions CouponRedemption[]
   orders            Order[]
+  favorites         Favorite[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -268,9 +269,10 @@ model Product {
   categoryId String
   category   Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
 
-  images   ProductImage[]
-  variants ProductVariant[]
-  badges   ProductBadge[]
+  images    ProductImage[]
+  variants  ProductVariant[]
+  badges    ProductBadge[]
+  favorites Favorite[]
 
   ratingAverage Decimal @default(0) @db.Decimal(2, 1)
   ratingCount   Int     @default(0)
@@ -333,6 +335,80 @@ model ProductBadge {
   @@map("product_badges")
 }
 
+model Favorite {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@map("favorites")
+}
+
+// docs/07-recompensas.md → brinde progressivo por valor elegível do carrinho.
+model RewardTier {
+  id                String   @id @default(uuid())
+  minimumAmount     Decimal  @db.Decimal(10, 2)
+  isActive          Boolean  @default(true)
+  sortOrder         Int      @default(0)
+  rewardName        String
+  rewardDescription String   @default("")
+  rewardImage       String   @default("")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("reward_tiers")
+}
+
+enum PromotionType {
+  direct_discount
+  buy_x_get_y
+  progressive
+  flash_sale
+  kit
+  campaign
+}
+
+// docs/06-promocoes.md → campanhas de catálogo/carrinho, distintas de cupons.
+model Promotion {
+  id                 String        @id @default(uuid())
+  slug               String        @unique
+  name               String
+  description        String        @default("")
+  type               PromotionType
+  discountPercentage Decimal?      @db.Decimal(5, 2)
+  discountAmount     Decimal?      @db.Decimal(10, 2)
+  buyXGetY           Json?
+  progressiveTiers   Json?
+  kitItems           Json?
+  kitPrice           Decimal?      @db.Decimal(10, 2)
+  productIds         String[]      @default([])
+  categoryIds        String[]      @default([])
+  brandIds           String[]      @default([])
+  bannerImage        String?
+  startsAt           DateTime
+  endsAt             DateTime
+  isActive           Boolean       @default(true)
+  priority           Int           @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("promotions")
+}
+
+// docs/15-configuracoes.md → single-tenant, um único registro "singleton".
+model StoreSettings {
+  id        String   @id @default("singleton")
+  data      Json
+  updatedAt DateTime @updatedAt
+
+  @@map("store_settings")
+}
+
 // Contador atômico por ano para gerar `Order.orderNumber` (HA-YYYY-####) sem race condition
 // (upsert com increment dentro da mesma transaction que cria o pedido — docs/09-checkout-pedidos.md).
 model OrderCounter {
@@ -376,6 +452,12 @@ model Order {
   trackingCode String?
   trackingUrl  String?
   notes        String?
+
+  // Snapshot do brinde conquistado no momento do pedido (docs/07-recompensas.md → "No pedido").
+  rewardTierId      String?
+  rewardName        String?
+  rewardDescription String?
+  rewardImage       String?
 
   // Evita pedido duplicado em retry de rede (docs/09-checkout-pedidos.md → Idempotency-Key).
   idempotencyKey String? @unique

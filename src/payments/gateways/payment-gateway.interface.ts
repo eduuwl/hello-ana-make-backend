@@ -50,7 +50,7 @@ export interface ParsedWebhookEvent {
 /**
  * Interface agnóstica de provedor (docs/10-pagamentos.md → "Gateway-agnostic").
  * Trocar de mock para Asaas/Mercado Pago/Stripe é só implementar esta interface
- * e registrar em `payments.gateway.provider.ts` — o resto do domínio não muda.
+ * e registrar em `payment-gateway.resolver.ts` — o resto do domínio não muda.
  *
  * `refundPayment`/`cancelPayment` só executam a ação no gateway — quem decide se o
  * reembolso é total ou parcial e atualiza o `Payment`/`Order` é o `PaymentsService`.
@@ -66,5 +66,3 @@ export interface PaymentGateway {
    */
   parseWebhookEvent(rawBody: unknown): ParsedWebhookEvent | null;
 }
-
-export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');

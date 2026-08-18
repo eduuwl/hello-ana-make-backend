@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PaymentStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SettingsService } from '../../settings/settings.service';
 import { ApiException } from '../../common/exceptions/api.exception';
 import {
   CreatePaymentGatewayInput,
@@ -57,6 +58,7 @@ export class AsaasPaymentGateway implements PaymentGateway {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   async createPayment(input: CreatePaymentGatewayInput): Promise<CreatePaymentGatewayResult> {
@@ -187,7 +189,15 @@ export class AsaasPaymentGateway implements PaymentGateway {
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const apiKey = this.config.getOrThrow<string>('ASAAS_API_KEY');
+    const { integrations } = await this.settingsService.getInternal();
+    const apiKey = integrations.asaasApiKey;
+    if (!apiKey) {
+      throw new ApiException(
+        'Gateway Asaas selecionado mas asaasApiKey não configurada (PATCH /admin/settings/integrations).',
+        'PAYMENT_GATEWAY_NOT_CONFIGURED',
+        500,
+      );
+    }
     const baseUrl = this.config.get('ASAAS_API_URL', 'https://api-sandbox.asaas.com/v3');
 
     const response = await fetch(`${baseUrl}${path}`, {

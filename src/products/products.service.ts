@@ -7,23 +7,25 @@ import { ProductQueryDto } from './dto/product-query.dto';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductVariantInputDto } from './dto/product-variant-input.dto';
-import { toProductResponse, ProductWithRelations } from './mappers/product.mapper';
+import { PRODUCT_INCLUDE, toProductResponse, ProductWithRelations } from './mappers/product.mapper';
+import { buildProductOrderBy } from './product-sort.util';
+import { PromotionsService } from '../promotions/promotions.service';
 
-const PRODUCT_INCLUDE = {
-  brand: true,
-  category: true,
-  images: true,
-  variants: true,
-  badges: true,
-} satisfies Prisma.ProductInclude;
+interface ProductContext {
+  allowInactive?: boolean;
+  userId?: string;
+}
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly promotionsService: PromotionsService,
+  ) {}
 
-  async list(query: ProductQueryDto, { allowInactive = false } = {}) {
+  async list(query: ProductQueryDto, { allowInactive = false, userId }: ProductContext = {}) {
     const where = await this.buildWhere(query, allowInactive);
-    const orderBy = this.buildOrderBy(query.sortBy);
+    const orderBy = buildProductOrderBy(query.sortBy);
 
     const [rows, total] = await Promise.all([
       this.prisma.product.findMany({
@@ -36,11 +38,18 @@ export class ProductsService {
       this.prisma.product.count({ where }),
     ]);
 
-    const items = rows.map((row) => toProductResponse(row as ProductWithRelations));
+    const [favoriteIds, promotions] = await Promise.all([
+      this.getFavoriteIds(userId, rows.map((r) => r.id)),
+      this.promotionsService.resolveActiveForProducts(rows),
+    ]);
+
+    const items = rows.map((row) =>
+      toProductResponse(row as ProductWithRelations, favoriteIds.has(row.id), promotions.get(row.id)),
+    );
     return paginate(items, total, query.page, query.pageSize);
   }
 
-  async getBySlug(slug: string, { allowInactive = false } = {}) {
+  async getBySlug(slug: string, { allowInactive = false, userId }: ProductContext = {}) {
     const product = await this.prisma.product.findUnique({
       where: { slug },
       include: PRODUCT_INCLUDE,
@@ -48,10 +57,20 @@ export class ProductsService {
     if (!product || (!allowInactive && !product.isActive)) {
       throw new NotFoundApiException('Produto não encontrado.');
     }
-    return toProductResponse(product as ProductWithRelations);
+
+    const [favoriteIds, promotions] = await Promise.all([
+      this.getFavoriteIds(userId, [product.id]),
+      this.promotionsService.resolveActiveForProducts([product]),
+    ]);
+
+    return toProductResponse(
+      product as ProductWithRelations,
+      favoriteIds.has(product.id),
+      promotions.get(product.id),
+    );
   }
 
-  async getRelated(id: string, limit = 8) {
+  async getRelated(id: string, limit = 8, userId?: string) {
     const product = await this.prisma.product.findUnique({ where: { id } });
     if (!product) {
       throw new NotFoundApiException('Produto não encontrado.');
@@ -68,7 +87,25 @@ export class ProductsService {
       include: PRODUCT_INCLUDE,
     });
 
-    return { items: related.map((row) => toProductResponse(row as ProductWithRelations)) };
+    const [favoriteIds, promotions] = await Promise.all([
+      this.getFavoriteIds(userId, related.map((r) => r.id)),
+      this.promotionsService.resolveActiveForProducts(related),
+    ]);
+
+    return {
+      items: related.map((row) =>
+        toProductResponse(row as ProductWithRelations, favoriteIds.has(row.id), promotions.get(row.id)),
+      ),
+    };
+  }
+
+  private async getFavoriteIds(userId: string | undefined, productIds: string[]): Promise<Set<string>> {
+    if (!userId || !productIds.length) return new Set();
+    const favorites = await this.prisma.favorite.findMany({
+      where: { userId, productId: { in: productIds } },
+      select: { productId: true },
+    });
+    return new Set(favorites.map((f) => f.productId));
   }
 
   async create(dto: CreateProductDto) {
@@ -253,28 +290,6 @@ export class ProductsService {
     }
 
     return where;
-  }
-
-  private buildOrderBy(sortBy: ProductQueryDto['sortBy']): Prisma.ProductOrderByWithRelationInput[] {
-    switch (sortBy) {
-      case 'price_asc':
-        return [{ minEffectivePrice: 'asc' }];
-      case 'price_desc':
-        return [{ maxEffectivePrice: 'desc' }];
-      case 'newest':
-        return [{ createdAt: 'desc' }];
-      case 'bestseller':
-        return [{ isBestseller: 'desc' }, { createdAt: 'desc' }];
-      case 'rating':
-        return [{ ratingAverage: 'desc' }];
-      case 'name_asc':
-        return [{ name: 'asc' }];
-      case 'name_desc':
-        return [{ name: 'desc' }];
-      case 'relevance':
-      default:
-        return [{ isFeatured: 'desc' }, { createdAt: 'desc' }];
-    }
   }
 
   private async expandCategoryIds(ids: string[]): Promise<string[]> {

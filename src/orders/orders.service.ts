@@ -19,6 +19,7 @@ import { AddressesService } from '../addresses/addresses.service';
 import { CouponsService, CouponValidationStatus } from '../coupons/coupons.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { PaymentsService } from '../payments/payments.service';
+import { RewardsService } from '../rewards/rewards.service';
 
 const CANCELLABLE_STATUSES: OrderStatus[] = ['pending_payment', 'paid', 'processing'];
 
@@ -74,6 +75,7 @@ export class OrdersService {
     private readonly couponsService: CouponsService,
     private readonly shippingService: ShippingService,
     private readonly paymentsService: PaymentsService,
+    private readonly rewardsService: RewardsService,
   ) {}
 
   async create(user: AuthenticatedUser, dto: CreateOrderDto, idempotencyKey?: string) {
@@ -160,6 +162,10 @@ export class OrdersService {
     const tax = 0;
     const total = Math.max(0, round2(subtotal - discount + shipping + tax));
 
+    // docs/07-recompensas.md → "No pedido": snapshot do brinde conquistado no valor elegível
+    // (subtotal - desconto do cupom, sem frete/tax) no momento da confirmação.
+    const rewardTier = await this.rewardsService.getCurrentTierForEligibleAmount(Math.max(0, subtotal - discount));
+
     const order = await this.prisma.$transaction(async (tx) => {
       for (const item of items) {
         const updated = await tx.productVariant.updateMany({
@@ -198,6 +204,10 @@ export class OrdersService {
           billingAddress: billingAddress ? (billingAddress as unknown as Prisma.InputJsonValue) : undefined,
           notes: dto.notes,
           idempotencyKey,
+          rewardTierId: rewardTier?.id,
+          rewardName: rewardTier?.rewardName,
+          rewardDescription: rewardTier?.rewardDescription,
+          rewardImage: rewardTier?.rewardImage,
           items: {
             create: items.map((i) => ({
               productId: i.productId,

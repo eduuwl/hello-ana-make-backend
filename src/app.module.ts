@@ -11,6 +11,12 @@ import { CouponsModule } from './coupons/coupons.module';
 import { ShippingModule } from './shipping/shipping.module';
 import { OrdersModule } from './orders/orders.module';
 import { PaymentsModule } from './payments/payments.module';
+import { FavoritesModule } from './favorites/favorites.module';
+import { RewardsModule } from './rewards/rewards.module';
+import { PromotionsModule } from './promotions/promotions.module';
+import { SettingsModule } from './settings/settings.module';
+import { AdminModule } from './admin/admin.module';
+import { UploadsModule } from './uploads/uploads.module';
 
 @Module({
   imports: [
@@ -19,13 +25,19 @@ import { PaymentsModule } from './payments/payments.module';
     AuthModule,
     CategoriesModule,
     BrandsModule,
+    PromotionsModule,
     ProductsModule,
     AddressesModule,
     CouponsModule,
     ShippingModule,
     CartModule,
+    RewardsModule,
+    FavoritesModule,
     PaymentsModule,
     OrdersModule,
+    SettingsModule,
+    AdminModule,
+    UploadsModule,
   ],
 })
 export class AppModule {}

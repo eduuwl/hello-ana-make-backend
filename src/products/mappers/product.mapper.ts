@@ -18,6 +18,24 @@ export type ProductWithRelations = ProductModel & {
   badges: ProductBadgeModel[];
 };
 
+export const PRODUCT_INCLUDE = {
+  brand: true,
+  category: true,
+  images: true,
+  variants: true,
+  badges: true,
+} satisfies Prisma.ProductInclude;
+
+export interface ActivePromotionView {
+  id: string;
+  label: string;
+  type: 'percentage' | 'fixed_amount' | 'buy_x_get_y' | 'flash_sale';
+  value: number;
+  startsAt: string;
+  endsAt: string;
+  isActive: boolean;
+}
+
 const LOW_STOCK_THRESHOLD = 5;
 
 function toNumber(value: Prisma.Decimal | number | null | undefined): number {
@@ -31,7 +49,11 @@ function effectivePrice(variant: ProductVariantModel): number {
     : toNumber(variant.price);
 }
 
-export function toProductResponse(product: ProductWithRelations, isFavorite = false) {
+export function toProductResponse(
+  product: ProductWithRelations,
+  isFavorite = false,
+  activePromotion?: ActivePromotionView,
+) {
   const variants = product.variants.map((v) => ({
     id: v.id,
     sku: v.sku,
@@ -111,6 +133,7 @@ export function toProductResponse(product: ProductWithRelations, isFavorite = fa
       type: b.type,
       color: b.color ?? undefined,
     })),
+    promotion: activePromotion,
     isFavorite,
     isFeatured: product.isFeatured,
     isNew: product.isNew,

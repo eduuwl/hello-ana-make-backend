@@ -1,10 +1,12 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe, ValidationError } from '@nestjs/common';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { ValidationApiException } from './common/exceptions/common.exceptions';
+import { UPLOADS_DIR } from './uploads/uploads.constants';
 
 function flattenValidationErrors(
   errors: ValidationError[],
@@ -26,13 +28,16 @@ function flattenValidationErrors(
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   app.use(helmet());
   app.enableCors({
     origin: process.env.CORS_ORIGIN?.split(',') ?? true,
     credentials: true,
   });
+
+  // Fora do prefixo /api/v1 — URLs de upload são absolutas (docs/14-admin.md → "/uploads/abc.webp").
+  app.useStaticAssets(UPLOADS_DIR, { prefix: '/uploads/' });
 
   app.setGlobalPrefix('api/v1');
 

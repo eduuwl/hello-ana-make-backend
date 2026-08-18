@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Order as OrderModel, Payment as PaymentModel, PaymentMethod, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -10,7 +10,7 @@ import {
 import { ApiException } from '../common/exceptions/api.exception';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { CouponsService } from '../coupons/coupons.service';
-import { PAYMENT_GATEWAY, PaymentGateway } from './gateways/payment-gateway.interface';
+import { PaymentGatewayResolver } from './gateways/payment-gateway.resolver';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { toPaymentResponse } from './mappers/payment.mapper';
 
@@ -38,7 +38,7 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly couponsService: CouponsService,
-    @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
+    private readonly gatewayResolver: PaymentGatewayResolver,
   ) {}
 
   async createPayment(user: AuthenticatedUser, dto: CreatePaymentDto, ip?: string) {
@@ -67,7 +67,8 @@ export class PaymentsService {
 
     const customer = await this.prisma.user.findUniqueOrThrow({ where: { id: order.userId } });
 
-    const result = await this.gateway.createPayment({
+    const gateway = await this.gatewayResolver.resolve();
+    const result = await gateway.createPayment({
       orderId: order.id,
       method: input.method,
       amount: input.amount,
@@ -140,7 +141,8 @@ export class PaymentsService {
     }
 
     if (payment.transactionId) {
-      await this.gateway.cancelPayment(payment.transactionId);
+      const gateway = await this.gatewayResolver.resolve();
+      await gateway.cancelPayment(payment.transactionId);
     }
     const updated = await this.prisma.payment.update({
       where: { id },
@@ -167,7 +169,8 @@ export class PaymentsService {
     }
 
     if (payment.transactionId) {
-      await this.gateway.refundPayment(payment.transactionId, requested);
+      const gateway = await this.gatewayResolver.resolve();
+      await gateway.refundPayment(payment.transactionId, requested);
     }
 
     const newRefundedAmount = Math.min(total, alreadyRefunded + requested);
@@ -213,7 +216,8 @@ export class PaymentsService {
       throw new UnauthenticatedApiException('Assinatura de webhook inválida.');
     }
 
-    const parsed = this.gateway.parseWebhookEvent(rawBody);
+    const gateway = await this.gatewayResolver.resolve();
+    const parsed = gateway.parseWebhookEvent(rawBody);
     if (!parsed) {
       // Evento não mapeado ou payload desconhecido — 200 evita retry infinito no gateway.
       return { received: true };

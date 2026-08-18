@@ -176,6 +176,24 @@ export class CartService {
     return this.toResponse(await this.getCartOrThrow(cart.id), user);
   }
 
+  /** docs/07-recompensas.md → eligibleAmount = subtotal - couponDiscount (frete/tax excluídos). */
+  async computeEligibleAmount(user: AuthenticatedUser | null, cartIdHeader?: string): Promise<number> {
+    const cart = await this.resolveCart(user, cartIdHeader);
+    const { subtotal, lines } = await this.computeSubtotalAndLines(cart);
+    if (!cart.couponCode) return subtotal;
+
+    const validation = await this.couponsService.validate({
+      code: cart.couponCode,
+      userId: user?.id ?? null,
+      cartSubtotal: subtotal,
+      productIds: lines.map((l) => l.productId),
+      categoryIds: lines.map((l) => l.categoryId),
+      lines,
+    });
+    const discount = validation.status === 'valid' ? validation.discountAmount : 0;
+    return Math.max(0, subtotal - discount);
+  }
+
   private async getCartOrThrow(id: string): Promise<CartWithItems> {
     const cart = await this.prisma.cart.findUnique({ where: { id }, include: { items: true } });
     if (!cart) throw new NotFoundApiException('Carrinho não encontrado.');

@@ -16,6 +16,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { UpdateMeDto } from './dto/update-me.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { SettingsService } from '../settings/settings.service';
 
 export interface AuthSession {
   user: PublicUser;
@@ -33,6 +34,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthSession> {
@@ -194,17 +196,21 @@ export class AuthService {
     });
   }
 
-  getSignupPromotion() {
-    const enabled = this.config.get('SIGNUP_PROMOTION_ENABLED', 'true') === 'true';
-    if (!enabled) {
+  // docs/15-configuracoes.md → "signupPromotionEnabled=false → GET /auth/signup-promotion inativo".
+  // Fonte da verdade é StoreSettings (editável pelo admin), não env var.
+  async getSignupPromotion() {
+    const { signupPromotion } = await this.settingsService.getPublic();
+    const isExpired = signupPromotion.expiresAt ? new Date(signupPromotion.expiresAt) < new Date() : false;
+
+    if (!signupPromotion.enabled || isExpired) {
       return { success: false, message: 'Nenhuma promoção de cadastro ativa no momento.' };
     }
 
     return {
       success: true,
-      message: 'Cadastre-se e ganhe 10% de desconto na primeira compra.',
-      couponCode: this.config.get('SIGNUP_PROMOTION_COUPON_CODE', 'BEMVINDA10'),
-      discountPercentage: Number(this.config.get('SIGNUP_PROMOTION_DISCOUNT_PERCENTAGE', '10')),
+      message: signupPromotion.message,
+      couponCode: signupPromotion.couponCode,
+      discountPercentage: signupPromotion.discountPercentage,
     };
   }
 
