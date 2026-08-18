@@ -21,17 +21,19 @@ Fase 1 (catálogo + auth), conforme os docs do frontend:
 | Cupons | `05-cupons.md` | ✅ validação completa (9 passos), aplicar/remover no carrinho, admin CRUD |
 | Frete | `08-frete.md` | ✅ cotação mock PAC/SEDEX/EXPRESSA, seleção no carrinho · ⏳ tracking/shipment (depende de Pedidos) |
 | Carrinho | `04-carrinho.md` | ✅ guest via `X-Cart-Id`, merge no login, cupom, frete, totais completos |
-| Admin (parcial) | `14-admin.md` | ✅ CRUD de produtos/categorias/marcas/cupons · ⏳ dashboard, pedidos, uploads |
+| Checkout/Pedidos | `09-checkout-pedidos.md` | ✅ criação com reserva de estoque, máquina de estados, cancelamento, admin CRUD de status |
+| Pagamentos | `10-pagamentos.md` | ✅ gateway-agnostic — **mock** e **Asaas** (Pix/cartão/boleto), webhook, reembolso · ⏳ Mercado Pago/Stripe |
+| Admin (parcial) | `14-admin.md` | ✅ CRUD de produtos/categorias/marcas/cupons/pedidos · ⏳ dashboard, uploads |
 
 **Ainda não implementado** (próximas fases — ver "Como continuar" abaixo): promoções, recompensas,
-checkout/pedidos, pagamentos, favoritos, configurações da loja, dashboard admin, upload de imagens.
+favoritos, configurações da loja, dashboard admin, upload de imagens, gateway de pagamento real.
 
 ---
 
 ## Stack
 
 - **NestJS 10** (TypeScript) — módulos: `auth`, `categories`, `brands`, `products`, `addresses`,
-  `coupons`, `shipping`, `cart`
+  `coupons`, `shipping`, `cart`, `orders`, `payments`
 - **Prisma 5** como ORM, schema em `prisma/schema.prisma`
 - **PostgreSQL** (Neon em produção; qualquer Postgres local também funciona)
 - **JWT** (access + refresh) via `@nestjs/jwt` + `passport-jwt`
@@ -65,6 +67,8 @@ DIRECT_URL="postgresql://user:pass@ep-xxxx.sa-east-1.aws.neon.tech/hello_ana_mak
 JWT_ACCESS_SECRET="gere-com-openssl-rand-hex-32"
 JWT_REFRESH_SECRET="gere-outro-valor-diferente"
 CORS_ORIGIN="http://localhost:3000"
+PAYMENT_GATEWAY="mock"
+PAYMENT_WEBHOOK_SECRET="gere-outro-valor-diferente"
 ```
 
 > `DATABASE_URL` (pooled) é usada pela aplicação em runtime; `DIRECT_URL` é usada só pelo Prisma
@@ -167,8 +171,49 @@ no Render (ex.: `https://hello-ana-make-backend.onrender.com/api`) e `NEXT_PUBLI
 - **Frete é stateless/mock**: `ShippingService` não tem tabela própria — as 3 opções (PAC/SEDEX/
   Expressa) são uma constante no código, igual ao mock sugerido no doc. Integrar SuperFrete de
   verdade é só trocar o corpo de `shipping.service.ts#quote`, a interface pública não muda.
-  `GET /shipping/tracking/{code}` e a criação de shipment (admin) ficam para quando o domínio de
-  Pedidos existir (precisam de um pedido para se referenciar).
+  `GET /shipping/tracking/{code}` fica para quando houver integração real de transportadora.
+- **Reserva de estoque em `Order`**: sem coluna de "reservado" — `OrdersService#create` decrementa
+  `ProductVariant.stock` direto (dentro de uma transaction que valida `stock`/`isAvailable` por
+  item antes de decrementar), o que já funciona como a reserva sugerida em
+  `pending_payment` (docs/09-checkout-pedidos.md). Cancelar (`status → cancelled`) devolve o
+  estoque; pagamento confirmado não mexe nele (já foi debitado na criação); reembolso não devolve
+  automaticamente (mercadoria pode já ter saído) — ajustável depois se um caso de uso pedir.
+- **Endereço do pedido é snapshot em `Json`, não FK**: `Order.shippingAddress`/`billingAddress`
+  guardam uma cópia do endereço no momento da compra (mesmo shape de `AddressResponse`), porque o
+  `Address` original pode ser editado ou apagado depois e o pedido precisa manter o histórico —
+  mesma lógica de snapshot que `CartItem` já usa para preço/nome de produto.
+- **`orderNumber` (`HA-YYYY-####`) é gerado por um contador atômico** (`OrderCounter`, `upsert`
+  com `increment` dentro da mesma transaction que cria o pedido) em vez de contar linhas
+  existentes — evita duas requisições concorrentes gerarem o mesmo número.
+- **Gateway de pagamento é plugável, com duas implementações**: `PaymentGateway`
+  (`src/payments/gateways/`) é a interface agnóstica de provedor pedida em `10-pagamentos.md`.
+  `MockPaymentGateway` (Pix gera QR fake, boleto gera código de barras fake, cartão aprova na hora
+  exceto se o token contiver `"fail"`) é o padrão, pra dev/teste sem credenciais.
+  `AsaasPaymentGateway` é a integração real — ativa com `PAYMENT_GATEWAY=asaas` +
+  `ASAAS_API_KEY`/`ASAAS_API_URL` no `.env` (chave sandbox em https://sandbox.asaas.com >
+  Configurações > Integrações > API). Trocar para Mercado Pago/Stripe no futuro é implementar a
+  interface e registrar em `payments.gateway.provider.ts` — nada no resto do domínio muda.
+  `POST /orders` só abre cobrança automática para Pix/boleto (não dependem de dado extra do
+  cliente); para cartão, o client chama `POST /payments` à parte com o token.
+- **Cartão de crédito nunca toca o PAN no backend**: o `card.token` que `POST /payments` espera é
+  o `creditCardToken` gerado pelo **Asaas.js** no frontend (tokenização client-side,
+  https://docs.asaas.com/reference/tokenizacao-de-cartao-de-credito) — o backend só repassa esse
+  token pro Asaas, nunca recebe número/CVV. Isso ainda não está implementado no frontend.
+- **Cliente Asaas é criado uma vez por usuário e reaproveitado**: `User.asaasCustomerId` cacheia o
+  `id` do cliente no Asaas (criado no primeiro pagamento via `POST /customers`, precisa de
+  `User.document` preenchido — se faltar, `PaymentsService` responde `422 CUSTOMER_DOCUMENT_REQUIRED`
+  em vez de deixar o Asaas rejeitar com um erro genérico).
+- **Webhook de pagamento não usa JWT**: `POST /webhooks/payments/{gateway}` é autenticado por um
+  segredo compartilhado — `X-Webhook-Secret` pro mock, ou o header `asaas-access-token` que o
+  Asaas manda de verdade em cada notificação (nome de header fixo, definido por eles; configure o
+  mesmo valor de `PAYMENT_WEBHOOK_SECRET` como "Token de autenticação" ao criar o webhook no
+  painel do Asaas, apontando pra `https://<sua-api>/api/v1/webhooks/payments/asaas`). Cada evento
+  do Asaas (`PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED`, `PAYMENT_OVERDUE`, `PAYMENT_REFUNDED` etc.) é
+  traduzido pro nosso `PaymentStatus` em `AsaasPaymentGateway#parseWebhookEvent` — eventos fora
+  desse mapa são ignorados (mas ainda respondidos com `200`, pra não gerar retry).
+- **Consumo de cupom acontece só no webhook de pagamento confirmado**: `PaymentsService` chama
+  `CouponsService.consume()` exatamente como o README já previa antes desse domínio existir —
+  nunca na criação do pedido.
 
 ---
 
@@ -176,18 +221,16 @@ no Render (ex.: `https://hello-ana-make-backend.onrender.com/api`) e `NEXT_PUBLI
 
 Cada um tem seu contrato detalhado em `hello-ana-make-frontend/docs/`:
 
-1. **Checkout/Pedidos** (`09-checkout-pedidos.md`) — maior peça que falta: cria `Order`/`OrderItem`
-   a partir do carrinho (snapshot de preços/endereço), reserva estoque, e é o ponto que deve chamar
-   `CouponsService.consume()` quando o pagamento confirmar.
-2. **Pagamentos** (`10-pagamentos.md`) — Pix/cartão/boleto gateway-agnostic; webhook marca o pedido
-   `paid` e dispara o consumo do cupom.
-3. **Recompensas** (`07-recompensas.md`) — tiers de brinde por valor; `rewardEligibleAmount` já
+1. **Gateway de pagamento real** (`10-pagamentos.md`) — plugar Asaas/Mercado Pago/Stripe atrás da
+   interface `PaymentGateway` (`src/payments/gateways/`), no lugar do `MockPaymentGateway` atual,
+   e trocar `PAYMENT_WEBHOOK_SECRET` por verificação de assinatura HMAC real do provedor.
+2. **Recompensas** (`07-recompensas.md`) — tiers de brinde por valor; `rewardEligibleAmount` já
    sai pronto no carrinho (`subtotal - discount`), só falta a tabela de tiers e o endpoint de
    progresso.
-4. **Favoritos** (`13-favoritos.md`) — depois disso, atualizar `isFavorite` no mapper de produtos.
-5. **Promoções** (`06-promocoes.md`) — depois, popular `Product.promotion`.
-6. **Configurações da loja** (`15-configuracoes.md`) e restante do **Admin** (`14-admin.md`):
-   dashboard, pedidos, upload de imagens.
+3. **Favoritos** (`13-favoritos.md`) — depois disso, atualizar `isFavorite` no mapper de produtos.
+4. **Promoções** (`06-promocoes.md`) — depois, popular `Product.promotion`.
+5. **Configurações da loja** (`15-configuracoes.md`) e restante do **Admin** (`14-admin.md`):
+   dashboard, upload de imagens.
 
 Padrões já estabelecidos para seguir nos próximos módulos: DTOs com `class-validator`, mapper
 `toXResponse` separado do service, exceptions via `src/common/exceptions`, paginação via

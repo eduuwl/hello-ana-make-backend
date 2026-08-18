@@ -29,6 +29,38 @@ enum BadgeType {
   custom
 }
 
+enum OrderStatus {
+  pending_payment
+  paid
+  processing
+  shipped
+  in_transit
+  delivered
+  cancelled
+  refunded
+  returned
+}
+
+enum PaymentMethod {
+  credit_card
+  debit_card
+  pix
+  boleto
+  wallet
+  store_credit
+}
+
+enum PaymentStatus {
+  pending
+  processing
+  authorized
+  paid
+  failed
+  cancelled
+  refunded
+  partially_refunded
+}
+
 model User {
   id              String    @id @default(uuid())
   email           String    @unique
@@ -50,9 +82,14 @@ model User {
   resetPasswordTokenHash String?
   resetPasswordExpiresAt DateTime?
 
+  // Cliente correspondente no Asaas — criado no primeiro pagamento e reaproveitado depois
+  // (docs/10-pagamentos.md → gateway real). Só usado quando PAYMENT_GATEWAY=asaas.
+  asaasCustomerId String?
+
   addresses         Address[]
   cart              Cart?
   couponRedemptions CouponRedemption[]
+  orders            Order[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -294,4 +331,130 @@ model ProductBadge {
   color     String?
 
   @@map("product_badges")
+}
+
+// Contador atômico por ano para gerar `Order.orderNumber` (HA-YYYY-####) sem race condition
+// (upsert com increment dentro da mesma transaction que cria o pedido — docs/09-checkout-pedidos.md).
+model OrderCounter {
+  year  Int @id
+  value Int @default(0)
+
+  @@map("order_counters")
+}
+
+model Order {
+  id          String      @id @default(uuid())
+  orderNumber String      @unique
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  status      OrderStatus @default(pending_payment)
+
+  items OrderItem[]
+
+  subtotal Decimal @db.Decimal(10, 2)
+  discount Decimal @default(0) @db.Decimal(10, 2)
+  shipping Decimal @default(0) @db.Decimal(10, 2)
+  tax      Decimal @default(0) @db.Decimal(10, 2)
+  total    Decimal @db.Decimal(10, 2)
+  currency String  @default("BRL")
+
+  couponCode String?
+
+  paymentMethod PaymentMethod
+  paymentStatus PaymentStatus @default(pending)
+  // Referência de conveniência ao Payment ativo/mais recente — um pedido pode ter várias
+  // tentativas de pagamento (docs/10-pagamentos.md → "pagamento duplicado"), por isso não é FK.
+  paymentId     String?
+
+  shippingOptionId String?
+
+  // Snapshot imutável do endereço no momento do pedido (não FK para Address, que pode mudar/ser
+  // apagado depois) — mesmo shape de AddressResponse.
+  shippingAddress Json
+  billingAddress  Json?
+
+  trackingCode String?
+  trackingUrl  String?
+  notes        String?
+
+  // Evita pedido duplicado em retry de rede (docs/09-checkout-pedidos.md → Idempotency-Key).
+  idempotencyKey String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  paidAt      DateTime?
+  shippedAt   DateTime?
+  deliveredAt DateTime?
+  cancelledAt DateTime?
+  Payment     Payment[]
+
+  @@index([userId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id      String @id @default(uuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId   String
+  productSlug String
+  productName String
+  variantId   String
+  variantSku  String
+  variantName String
+  attributes  Json   @default("{}")
+  image       String
+
+  unitPrice        Decimal  @db.Decimal(10, 2)
+  promotionalPrice Decimal? @db.Decimal(10, 2)
+  quantity         Int
+  lineTotal        Decimal  @db.Decimal(10, 2)
+
+  @@map("order_items")
+}
+
+model Payment {
+  id      String @id @default(uuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  method PaymentMethod
+  status PaymentStatus @default(pending)
+
+  amount   Decimal @db.Decimal(10, 2)
+  currency String  @default("BRL")
+
+  pixQrCode    String?
+  pixQrCodeUrl String?
+  pixExpiresAt DateTime?
+
+  boletoUrl     String?
+  boletoBarcode String?
+
+  redirectUrl String?
+
+  cardBrand          String?
+  cardLastFourDigits String?
+  installments       Int?
+
+  // Idempotência de webhook (docs/10-pagamentos.md → "webhook fora de ordem: idempotente por transactionId").
+  transactionId String? @unique
+
+  failureReason  String?
+  refundedAmount Decimal? @db.Decimal(10, 2)
+  metadata       Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  authorizedAt DateTime?
+  paidAt       DateTime?
+  failedAt     DateTime?
+  cancelledAt  DateTime?
+  refundedAt   DateTime?
+
+  @@index([orderId])
+  @@map("payments")
 }
