@@ -47,6 +47,30 @@ export interface ParsedWebhookEvent {
   status: PaymentStatus;
 }
 
+export interface TokenizeCardInput {
+  customer: GatewayCustomerInput;
+  card: {
+    holderName: string;
+    number: string;
+    expiryMonth: string;
+    expiryYear: string;
+    ccv: string;
+  };
+  billingAddress: {
+    postalCode: string;
+    addressNumber: string;
+    addressComplement?: string;
+  };
+  /** IP do cliente — exigido pelo Asaas na tokenização (antifraude). */
+  remoteIp: string;
+}
+
+export interface TokenizeCardResult {
+  token: string;
+  brand?: string;
+  lastFourDigits?: string;
+}
+
 /**
  * Interface agnóstica de provedor (docs/10-pagamentos.md → "Gateway-agnostic").
  * Trocar de mock para Asaas/Mercado Pago/Stripe é só implementar esta interface
@@ -65,4 +89,11 @@ export interface PaymentGateway {
    * mas ainda respondidos com 200 pelo `PaymentsService` — docs/10-pagamentos.md).
    */
   parseWebhookEvent(rawBody: unknown): ParsedWebhookEvent | null;
+  /**
+   * Tokeniza os dados do cartão pra gerar o `creditCardToken` usado depois em
+   * `createPayment`. O Asaas não tem SDK client-side (sem chave pública/publishable
+   * key) — a tokenização só é possível autenticada com a `access_token` secreta,
+   * então acontece aqui no backend, nunca no navegador.
+   */
+  tokenizeCard(input: TokenizeCardInput): Promise<TokenizeCardResult>;
 }

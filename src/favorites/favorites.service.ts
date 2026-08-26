@@ -5,11 +5,15 @@ import { paginate } from '../common/dto/paginated-response.dto';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { PRODUCT_INCLUDE, ProductWithRelations, toProductResponse } from '../products/mappers/product.mapper';
 import { buildProductOrderBy } from '../products/product-sort.util';
+import { PromotionsService } from '../promotions/promotions.service';
 import { FavoritesQueryDto } from './dto/favorites-query.dto';
 
 @Injectable()
 export class FavoritesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly promotionsService: PromotionsService,
+  ) {}
 
   async list(user: AuthenticatedUser, query: FavoritesQueryDto) {
     const where = { userId: user.id, product: { isActive: true } };
@@ -26,7 +30,9 @@ export class FavoritesService {
       this.prisma.favorite.count({ where }),
     ]);
 
-    const items = favorites.map((f) => toProductResponse(f.product as ProductWithRelations, true));
+    const products = favorites.map((f) => f.product as ProductWithRelations);
+    const promotions = await this.promotionsService.resolveActiveForProducts(products);
+    const items = products.map((product) => toProductResponse(product, true, promotions.get(product.id)));
     return paginate(items, total, query.page, query.pageSize);
   }
 

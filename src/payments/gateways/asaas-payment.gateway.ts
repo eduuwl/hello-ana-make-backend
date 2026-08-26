@@ -10,6 +10,8 @@ import {
   GatewayCustomerInput,
   ParsedWebhookEvent,
   PaymentGateway,
+  TokenizeCardInput,
+  TokenizeCardResult,
 } from './payment-gateway.interface';
 
 interface AsaasCustomer {
@@ -26,6 +28,12 @@ interface AsaasPixQrCode {
   encodedImage?: string;
   payload?: string;
   expirationDate?: string;
+}
+
+interface AsaasTokenizeResult {
+  creditCardNumber: string;
+  creditCardBrand: string;
+  creditCardToken: string;
 }
 
 interface AsaasErrorBody {
@@ -50,8 +58,10 @@ const ASAAS_EVENT_TO_STATUS: Partial<Record<string, PaymentStatus>> = {
 /**
  * Implementação real de `PaymentGateway` para o Asaas (https://docs.asaas.com).
  * Autenticação de saída: header `access_token` (não Bearer). Cartão sempre via
- * `creditCardToken` — o PAN nunca passa por este backend, é tokenizado no frontend
- * com o Asaas.js (docs/10-pagamentos.md → "nunca receber PAN completo").
+ * `creditCardToken` — o Asaas não expõe SDK client-side/chave pública pra
+ * tokenizar direto no navegador (só o endpoint autenticado com a `access_token`
+ * secreta), então o PAN passa em trânsito por `tokenizeCard()` aqui no backend e
+ * nunca é persistido — só o token resultante é usado depois em `createPayment`.
  */
 @Injectable()
 export class AsaasPaymentGateway implements PaymentGateway {
@@ -122,6 +132,37 @@ export class AsaasPaymentGateway implements PaymentGateway {
           422,
         );
     }
+  }
+
+  async tokenizeCard(input: TokenizeCardInput): Promise<TokenizeCardResult> {
+    const customerId = await this.ensureCustomerId(input.customer);
+
+    const result = await this.request<AsaasTokenizeResult>('POST', '/creditCard/tokenizeCreditCard', {
+      customer: customerId,
+      creditCard: {
+        holderName: input.card.holderName,
+        number: input.card.number,
+        expiryMonth: input.card.expiryMonth,
+        expiryYear: input.card.expiryYear,
+        ccv: input.card.ccv,
+      },
+      creditCardHolderInfo: {
+        name: input.customer.name,
+        email: input.customer.email,
+        cpfCnpj: input.customer.document?.replace(/\D/g, ''),
+        postalCode: input.billingAddress.postalCode.replace(/\D/g, ''),
+        addressNumber: input.billingAddress.addressNumber,
+        addressComplement: input.billingAddress.addressComplement,
+        phone: input.customer.phone?.replace(/\D/g, ''),
+      },
+      remoteIp: input.remoteIp,
+    });
+
+    return {
+      token: result.creditCardToken,
+      brand: result.creditCardBrand,
+      lastFourDigits: result.creditCardNumber,
+    };
   }
 
   async refundPayment(transactionId: string, amount: number): Promise<void> {

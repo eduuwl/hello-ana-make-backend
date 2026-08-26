@@ -7,6 +7,8 @@ import {
   CreatePaymentGatewayResult,
   ParsedWebhookEvent,
   PaymentGateway,
+  TokenizeCardInput,
+  TokenizeCardResult,
 } from './payment-gateway.interface';
 
 const PAYMENT_STATUSES: PaymentStatus[] = [
@@ -72,6 +74,17 @@ export class MockPaymentGateway implements PaymentGateway {
           422,
         );
     }
+  }
+
+  /** Cartão terminado em "0002" simula recusa, pra testar o fluxo de ponta a ponta sem gateway real. */
+  async tokenizeCard(input: TokenizeCardInput): Promise<TokenizeCardResult> {
+    const digits = input.card.number.replace(/\D/g, '');
+    const declines = digits.endsWith('0002');
+    return {
+      token: `tok_mock_${declines ? 'fail_' : ''}${randomUUID()}`,
+      brand: 'MASTERCARD',
+      lastFourDigits: digits.slice(-4),
+    };
   }
 
   async refundPayment(_transactionId: string, _amount: number): Promise<void> {

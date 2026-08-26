@@ -3,6 +3,7 @@ import { Request } from 'express';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
+import { TokenizeCardDto } from './dto/tokenize-card.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -17,6 +18,15 @@ export class PaymentsController {
   create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreatePaymentDto, @Req() req: Request) {
     // IP do cliente — exigido por gateways reais (Asaas) na antifraude de cartão.
     return this.paymentsService.createPayment(user, dto, req.ip);
+  }
+
+  @Post('tokenize-card')
+  tokenizeCard(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: TokenizeCardDto,
+    @Req() req: Request,
+  ) {
+    return this.paymentsService.tokenizeCard(user, dto, req.ip ?? '0.0.0.0');
   }
 
   @Get(':id')

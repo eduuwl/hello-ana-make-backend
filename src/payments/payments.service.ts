@@ -12,6 +12,7 @@ import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { CouponsService } from '../coupons/coupons.service';
 import { PaymentGatewayResolver } from './gateways/payment-gateway.resolver';
 import { CreatePaymentDto } from './dto/create-payment.dto';
+import { TokenizeCardDto } from './dto/tokenize-card.dto';
 import { toPaymentResponse } from './mappers/payment.mapper';
 
 const AMOUNT_TOLERANCE = 0.01;
@@ -49,6 +50,35 @@ export class PaymentsService {
 
     const payment = await this.createPaymentInternal(order, { ...dto, ip });
     return toPaymentResponse(payment);
+  }
+
+  /** POST /payments/tokenize-card — gera o creditCardToken usado depois em createPayment. */
+  async tokenizeCard(user: AuthenticatedUser, dto: TokenizeCardDto, ip: string) {
+    const customer = await this.prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    const gateway = await this.gatewayResolver.resolve();
+
+    return gateway.tokenizeCard({
+      customer: {
+        externalId: customer.id,
+        name: customer.name,
+        email: customer.email,
+        document: customer.document ?? undefined,
+        phone: customer.phone ?? undefined,
+      },
+      card: {
+        holderName: dto.holderName,
+        number: dto.number,
+        expiryMonth: dto.expiryMonth,
+        expiryYear: dto.expiryYear,
+        ccv: dto.ccv,
+      },
+      billingAddress: {
+        postalCode: dto.postalCode,
+        addressNumber: dto.addressNumber,
+        addressComplement: dto.addressComplement,
+      },
+      remoteIp: ip,
+    });
   }
 
   /** Usado pelo `OrdersService` para abrir a cobrança inicial ao criar o pedido. */

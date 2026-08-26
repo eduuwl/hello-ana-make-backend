@@ -14,26 +14,42 @@ porque reflete o servidor com o qual o frontend vai conversar de verdade.
 
 ## 0. Leia primeiro: status da integração
 
-Conferido em `hello-ana-make-frontend` (branch `main`) nesta data: **as 13 classes
-`Api*Repository` de `src/repositories/api/` são stubs vazios** — todo método só chama
-`notImplemented("Classe.metodo")`. Isso inclui `ApiAuthRepository`, `ApiProductRepository`,
-`ApiOrderRepository`, `ApiPaymentRepository`, `ApiAddressRepository`, `ApiCouponRepository`,
-`ApiCategoryRepository`, `ApiBrandRepository`, `ApiFavoriteRepository`, `ApiPromotionRepository`,
-`ApiRewardRepository`, `ApiAdminRepository` e `SuperFreteShippingRepository`/`ApiShippingRepository`.
-`AsaasPaymentGateway`/`MercadoPagoPaymentGateway`/`StripePaymentGateway` em
-`repositories/api/payment.repository.ts` também são stubs — **não implemente essas três**, o
-gateway de pagamento é escolhido no backend (seção 12), o frontend só fala com
-`POST /payments`.
+**Atualizado após a integração real do frontend com este backend** (`hello-ana-make-frontend`,
+branch `main`) — as 13 classes `Api*Repository` de `src/repositories/api/` estão implementadas e
+testadas de ponta a ponta contra este servidor (carrinho guest→login, checkout completo com
+cartão de crédito aprovado/recusado, admin de clientes/upload/reembolso). `src/lib/container.ts`
+faz o switch mock↔api via `NEXT_PUBLIC_DATA_SOURCE === "api"`; `src/lib/http-client.ts` é o
+wrapper HTTP compartilhado (base URL, `Authorization`, parse de erro, refresh automático em 401).
 
-Ou seja: **isto não é uma verificação de contrato, é a implementação do zero** de todo o cliente
-HTTP do frontend. `src/lib/container.ts` já faz o switch mock↔api via
-`NEXT_PUBLIC_DATA_SOURCE === "api"` — só falta cada `Api*Repository` de fato chamar o backend.
-Não existe ainda nenhum helper HTTP compartilhado (`src/repositories/utils.ts` só tem `delay()` e
-`notImplemented()`) — vale criar um pequeno wrapper de `fetch` (base URL, header `Authorization`,
-parse do erro `{message,code,errors}`) e reusar nas 13 classes.
+Únicas exceções, todas de propósito (não são gap do frontend):
+- `AsaasPaymentGateway`/`MercadoPagoPaymentGateway`/`StripePaymentGateway` em
+  `repositories/api/payment.repository.ts` continuam stub — o gateway é escolhido *neste* backend
+  (seção 12.1), o frontend só fala com `POST /payments`.
+- `ShippingRepository.createShipment/getTracking/cancelShipment` continuam stub — **este backend
+  ainda não expõe rota nenhuma pra isso** (ver seção 7, "O que falta neste backend").
 
-Peça de trabalho separada e fora deste backend: **tokenização de cartão via Asaas.js** (seção 12.3)
-— sem isso, `credit_card` não funciona ponta a ponta.
+### O que falta neste backend (não é mais responsabilidade do frontend)
+
+1. **Tokenização de cartão** — ver seção 12.3. A suposição original deste doc (Asaas.js
+   client-side no navegador) estava errada — o Asaas não tem SDK/chave pública pra isso, só a API
+   autenticada com a `access_token` secreta. Já implementei `POST /payments/tokenize-card` aqui
+   no backend pra resolver isso (mesma sessão desta atualização) — está funcional e testado (mock
+   gateway) em `src/payments/`. **Falta**: testar contra o Asaas sandbox/produção de verdade (só
+   validei com `paymentGateway: "mock"`); os campos `creditCardHolderInfo.postalCode`/
+   `addressNumber` vêm do endereço de cobrança que o frontend já tem no checkout — não construí
+   nenhum fallback caso o usuário não tenha endereço com CEP/número preenchidos além de retornar
+   erro (ver seção 12.3).
+2. **Frete — envio/rastreio real** (seção 7): `POST /shipping/shipments`, `GET
+   /shipping/tracking/:code`, cancelamento de remessa. Sem isso, o pedido nunca ganha
+   `trackingCode`/`trackingUrl` de verdade — hoje só o admin preenche isso manualmente via `PATCH
+   /admin/orders/:id/status`. Cotação (`POST /shipping/quote`) já é real, só a integração
+   SuperFrete que é mock.
+3. **E-mail transacional** (seção 2): `forgot-password` só loga o token no console, não envia
+   e-mail de verdade. Mesmo problema provavelmente vale pra confirmação de pedido/pagamento —
+   nenhum e-mail é enviado por nada neste backend hoje.
+4. ~~**`/favorites` sem `promotion`**~~ ✅ Resolvido — `favorites.service.ts` agora chama
+   `promotionsService.resolveActiveForProducts` igual ao `products.service.ts`, testado e
+   confirmado retornando `promotion` populado em `GET /favorites`.
 
 ---
 
@@ -500,19 +516,47 @@ Se `Order.paymentMethod` for `pix` ou `boleto`, `POST /orders` já abre a cobran
 `payment` preenchido na mesma resposta — **não é preciso chamar `POST /payments` depois** nesse
 caso (só se quiser tentar de novo após falha/expiração).
 
-### 12.3 Cartão de crédito — **precisa de trabalho no frontend, fora deste backend**
-`card.token` **não é um número de cartão nem um token qualquer** — é o `creditCardToken` gerado
-pelo **Asaas.js** (tokenização client-side no navegador,
-https://docs.asaas.com/reference/tokenizacao-de-cartao-de-credito). O backend nunca recebe
-número/CVV — só repassa esse token pro gateway. Isso significa: antes de chamar `POST /payments`
-com `method: 'credit_card'`, o frontend precisa:
-1. Carregar o SDK Asaas.js na página de checkout.
-2. Tokenizar os dados do cartão preenchidos pelo usuário → recebe `creditCardToken`.
-3. Mandar esse valor como `card.token` em `POST /payments`.
+### 12.3 Cartão de crédito — tokenização (`POST /payments/tokenize-card`)
 
-Sem isso, `credit_card` não tem como funcionar de ponta a ponta — nem no `mock` gateway
-(que só simula aprovação/recusa a partir de qualquer string em `card.token`, útil pra testar o
-resto do fluxo sem o SDK) nem no `asaas` real.
+**Correção importante**: a versão anterior deste doc dizia que `card.token` vinha de um "Asaas.js"
+tokenizado no navegador. **Isso não existe** — conferi a documentação oficial do Asaas
+(https://docs.asaas.com/reference/tokenizacao-de-cartao-de-credito e
+https://docs.asaas.com/docs/sdks): o único SDK deles é Java (servidor), e tanto a tokenização
+quanto a criação de cobrança exigem o header `access_token` — a chave **secreta** do lojista, que
+nunca pode ir pro navegador. Não existe chave pública/publishable key nem SDK client-side (ao
+contrário de Stripe.js, SDK do Mercado Pago ou pagarme.js).
+
+Por isso a tokenização acontece **aqui no backend**, autenticada com a `access_token`, e o PAN só
+passa em trânsito por essa rota — nunca é persistido, só o `creditCardToken` resultante é salvo
+(no `Payment`, via `card.brand`/`card.lastFourDigits`).
+
+```ts
+// POST /payments/tokenize-card — Bearer obrigatório
+// Body (TokenizeCardDto)
+{
+  holderName: string, number: string, expiryMonth: string /* "MM" */, expiryYear: string /* "AAAA" */,
+  ccv: string, postalCode: string, addressNumber: string, addressComplement?: string,
+}
+```
+Nome/e-mail/CPF/telefone do titular **não vão no body** — vêm do perfil do usuário autenticado
+(mesma resolução de `customer` que `POST /payments` já usa; se o usuário não tiver `document`
+cadastrado, `422 CUSTOMER_DOCUMENT_REQUIRED`). `postalCode`/`addressNumber` são do endereço de
+cobrança escolhido no checkout — o frontend manda o que tiver, mas se ele não tiver endereço
+nenhum ainda (ex.: primeiro passo do checkout), a chamada falha porque esses campos são
+obrigatórios; não há fallback pro CEP da loja ou algo assim.
+
+Resposta (`201`):
+```ts
+{ token: string /* creditCardToken do Asaas */, brand?: string, lastFourDigits?: string }
+```
+Manda esse `token` em `card.token` do `POST /payments` normal (seção acima), junto com
+`installments`/`holderName` que o frontend já tinha.
+
+No gateway `mock`, cartão terminado em `"0002"` gera um token que faz `POST /payments` recusar
+(`status: 'failed'`) — convenção pra testar o fluxo de recusa sem o Asaas real. Implementado em
+`src/payments/gateways/{asaas,mock}-payment.gateway.ts` + `payments.controller.ts`. **Testado**
+com `paymentGateway: "mock"` (aprovado e recusado, ponta a ponta via checkout real) — **não
+testado ainda contra o Asaas sandbox/produção**.
 
 ### `POST /webhooks/payments/:gateway` — **não é o frontend quem chama isso**
 Rota pública (sem JWT), chamada pelo próprio Asaas/gateway quando o pagamento muda de status.
@@ -631,14 +675,16 @@ automaticamente (outras transições não mexem em estoque).
   **NestJS**. Contrato HTTP/JSON é o mesmo, mas não existe nada Laravel-específico (rotas,
   formato de erro, paginação — tudo já é o que está documentado aqui).
 - **Reward gift no pedido**: `docs/09-checkout-pedidos.md` sugeria `rewardTierId`/`rewardGift`
-  como "campos extras sugeridos" — o backend implementou exatamente isso (seção 11), então os
-  `contracts/order.contract.ts` do frontend devem incluir esses dois campos opcionais se ainda
-  não incluírem.
+  como "campos extras sugeridos" — o backend implementou exatamente isso (seção 11). ✅ Resolvido
+  — `contracts/order.contract.ts` do frontend já inclui os dois campos.
 - **`ShippingRepository.createShipment/getTracking/cancelShipment`**: sem endpoint no backend
-  ainda (seção 7) — implemente só `quote()` por enquanto.
-- **`/favorites` sem `promotion`**: gap real do backend (seção 8), não do doc — se virar problema
-  de UI, é ajuste de uma linha em `favorites.service.ts` (chamar
-  `promotionsService.resolveActiveForProducts`), não do frontend.
+  ainda (seção 7) — pendência real, ver "O que falta neste backend" na seção 0.
+- **`/favorites` sem `promotion`**: ✅ Resolvido — `favorites.service.ts` já chama
+  `promotionsService.resolveActiveForProducts`, `GET /favorites` retorna `promotion` populado.
+- **Tokenização de cartão via "Asaas.js"** (`docs/10-pagamentos.md`): a premissa de tokenização
+  client-side nunca foi possível com o Asaas real (seção 12.3) — o doc original partiu de uma
+  suposição errada sobre como o gateway funciona. ✅ Resolvido com `POST
+  /payments/tokenize-card`, implementado neste backend.
 
 ---
 
@@ -672,7 +718,7 @@ Recompensas     GET /rewards/tiers · GET /rewards/progress[?eligibleAmount]
 Pedidos         POST /orders · GET /orders[?...] · GET /orders/:id
                 GET /orders/by-number/:orderNumber · POST /orders/:id/cancel
 
-Pagamentos      POST /payments · GET /payments/:id
+Pagamentos      POST /payments · POST /payments/tokenize-card · GET /payments/:id
                 POST /payments/:id/cancel · POST /payments/:id/refund [admin]
 
 Settings        GET /settings
