@@ -84,7 +84,20 @@ export class AsaasPaymentGateway implements PaymentGateway {
           dueDate: today,
           externalReference: input.orderId,
         });
-        const qr = await this.request<AsaasPixQrCode>('GET', `/payments/${payment.id}/pixQrCode`);
+        // A cobrança acima já existe de verdade na Asaas nesse ponto (billingType
+        // PIX é aceito mesmo sem chave Pix cadastrada na conta) — só falha ao
+        // buscar o QR code. Sem isso, uma conta sem chave Pix cria uma cobrança
+        // real órfã a cada tentativa (nunca cancelada, nunca salva aqui).
+        let qr: AsaasPixQrCode;
+        try {
+          qr = await this.request<AsaasPixQrCode>('GET', `/payments/${payment.id}/pixQrCode`);
+        } catch (err) {
+          await this.request('DELETE', `/payments/${payment.id}`).catch(() => {
+            // Best-effort: se nem o cancelamento funcionar, a cobrança órfã fica
+            // pro reconciliar manualmente — mas ao menos tentamos limpar.
+          });
+          throw err;
+        }
         return {
           status: this.mapCreationStatus(payment.status),
           transactionId: payment.id,

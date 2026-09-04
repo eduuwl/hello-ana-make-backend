@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsISO8601, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsCpfCnpj } from '../../common/validators/is-cpf-cnpj.validator';
 
 class UpdateStoreGroupDto {
   @IsOptional()
@@ -11,7 +12,7 @@ class UpdateStoreGroupDto {
   legalName?: string;
 
   @IsOptional()
-  @IsString()
+  @IsCpfCnpj()
   document?: string;
 
   @IsOptional()

@@ -1,4 +1,5 @@
 import { IsBoolean, IsEmail, IsISO8601, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsCpfCnpj } from '../../common/validators/is-cpf-cnpj.validator';
 
 export class RegisterDto {
   @IsString()
@@ -17,7 +18,7 @@ export class RegisterDto {
   phone?: string;
 
   @IsOptional()
-  @IsString()
+  @IsCpfCnpj()
   document?: string;
 
   @IsOptional()

@@ -50,6 +50,24 @@ wrapper HTTP compartilhado (base URL, `Authorization`, parse de erro, refresh au
 4. ~~**`/favorites` sem `promotion`**~~ ✅ Resolvido — `favorites.service.ts` agora chama
    `promotionsService.resolveActiveForProducts` igual ao `products.service.ts`, testado e
    confirmado retornando `promotion` populado em `GET /favorites`.
+5. ~~**`document` sem validação real**~~ ✅ Resolvido — `UpdateMeDto`/`RegisterDto`/
+   `UpdateStoreGroupDto.document` só tinham `@IsString()`, aceitavam qualquer texto. Criei
+   `@IsCpfCnpj()` (`src/common/validators/is-cpf-cnpj.validator.ts`, dígito verificador de
+   verdade, sem depender de pacote novo) e apliquei nos três. Descoberto assim: um usuário de
+   teste ficou com CPF fake (`12345678901`) sem ninguém notar até tentar pagar de verdade no
+   Asaas — agora o erro aparece na hora de salvar o perfil, não no meio do checkout.
+6. **Cobrança criada no gateway mas perdida localmente se a gravação falhar** (`payments.service.ts
+   #createPaymentInternal`) — **bug real de produção, já aconteceu**: o pedido é criado numa
+   transaction própria; a cobrança no Asaas é aberta *depois*, fora dela; se `payment.create`/
+   `order.update` falhar em seguida (vimos lentidão de alguns segundos no Neon em operações de
+   carrinho — mesma classe de problema), a cobrança real já existe no Asaas (SMS já foi mandado
+   pro cliente) mas o backend não tem registro nenhum dela — sem `transactionId` salvo, não dá
+   pra cancelar/consultar por aqui, só direto no painel do Asaas. Mitiguei com retry (`src/
+   common/utils/retry.ts`, 3 tentativas) na gravação local + log alto (`Logger.error`) com
+   `orderNumber`/`transactionId` se mesmo assim falhar, pra pelo menos ser rastreável — mas isso
+   é só reduzir a chance, não elimina: uma solução completa exigiria idempotência de verdade
+   (ex.: salvar o `transactionId` *antes* de chamar o gateway, ou reconciliação via webhook
+   independente da resposta síncrona). Vale priorizar isso antes de depender pesado de produção.
 
 ---
 

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Order as OrderModel, Payment as PaymentModel, PaymentMethod, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,6 +9,7 @@ import {
 } from '../common/exceptions/common.exceptions';
 import { ApiException } from '../common/exceptions/api.exception';
 import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
+import { retry } from '../common/utils/retry';
 import { CouponsService } from '../coupons/coupons.service';
 import { PaymentGatewayResolver } from './gateways/payment-gateway.resolver';
 import { CreatePaymentDto } from './dto/create-payment.dto';
@@ -35,6 +36,8 @@ function toNumber(value: Prisma.Decimal | number | null | undefined): number {
 
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
@@ -117,32 +120,55 @@ export class PaymentsService {
       },
     });
 
-    const payment = await this.prisma.payment.create({
-      data: {
-        orderId: order.id,
-        method: input.method,
-        status: result.status,
-        amount: input.amount,
-        currency: input.currency,
-        pixQrCode: result.pixQrCode,
-        pixQrCodeUrl: result.pixQrCodeUrl,
-        pixExpiresAt: result.pixExpiresAt,
-        boletoUrl: result.boletoUrl,
-        boletoBarcode: result.boletoBarcode,
-        redirectUrl: result.redirectUrl,
-        transactionId: result.transactionId,
-        cardBrand: input.card?.brand,
-        cardLastFourDigits: input.card?.lastFourDigits,
-        installments: input.card?.installments,
-        failureReason: result.failureReason,
-        metadata: input.metadata,
-      },
-    });
-
-    await this.prisma.order.update({
-      where: { id: order.id },
-      data: { paymentId: payment.id, paymentMethod: input.method },
-    });
+    // A partir daqui o gateway JÁ criou a cobrança de verdade (dinheiro real em
+    // produção) — falha transitória salvando localmente não pode virar "nunca
+    // aconteceu". Tenta de novo antes de desistir; se mesmo assim falhar, loga
+    // tudo que precisa pra reconciliar manualmente em vez de engolir o erro.
+    let payment: PaymentModel;
+    try {
+      payment = await retry(() =>
+        this.prisma.payment.create({
+          data: {
+            orderId: order.id,
+            method: input.method,
+            status: result.status,
+            amount: input.amount,
+            currency: input.currency,
+            pixQrCode: result.pixQrCode,
+            pixQrCodeUrl: result.pixQrCodeUrl,
+            pixExpiresAt: result.pixExpiresAt,
+            boletoUrl: result.boletoUrl,
+            boletoBarcode: result.boletoBarcode,
+            redirectUrl: result.redirectUrl,
+            transactionId: result.transactionId,
+            cardBrand: input.card?.brand,
+            cardLastFourDigits: input.card?.lastFourDigits,
+            installments: input.card?.installments,
+            failureReason: result.failureReason,
+            metadata: input.metadata,
+          },
+        }),
+      );
+      await retry(() =>
+        this.prisma.order.update({
+          where: { id: order.id },
+          data: { paymentId: payment.id, paymentMethod: input.method },
+        }),
+      );
+    } catch (err) {
+      this.logger.error(
+        `COBRANÇA CRIADA NO GATEWAY MAS NÃO SALVA LOCALMENTE — reconciliar manualmente. ` +
+          `orderId=${order.id} orderNumber=${order.orderNumber} method=${input.method} ` +
+          `amount=${input.amount} gatewayTransactionId=${result.transactionId ?? 'N/A'}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+      throw new ApiException(
+        'Pagamento foi processado no gateway, mas houve uma falha ao registrar aqui. ' +
+          'Entre em contato com o suporte informando o número do pedido antes de tentar novamente.',
+        'PAYMENT_PERSIST_FAILED',
+        500,
+      );
+    }
 
     if (result.status === 'paid') {
       return this.markOrderPaid(payment);

@@ -336,34 +336,41 @@ export class CartService {
         where: { id: guestItem.variantId },
       });
       const stockCap = Math.min(variant?.stock ?? 0, STORE_MAX_QTY);
+      if (stockCap <= 0) continue;
 
-      const existing = userCart.items.find((i) => i.variantId === guestItem.variantId);
-      if (existing) {
-        await this.prisma.cartItem.update({
-          where: { id: existing.id },
-          data: { quantity: Math.min(existing.quantity + guestItem.quantity, stockCap || existing.quantity) },
-        });
-      } else if (stockCap > 0) {
-        await this.prisma.cartItem.create({
-          data: {
-            cartId: userCart.id,
-            productId: guestItem.productId,
-            productSlug: guestItem.productSlug,
-            productName: guestItem.productName,
-            variantId: guestItem.variantId,
-            variantSku: guestItem.variantSku,
-            variantName: guestItem.variantName,
-            attributes: guestItem.attributes ?? {},
-            image: guestItem.image,
-            unitPrice: guestItem.unitPrice,
-            promotionalPrice: guestItem.promotionalPrice,
-            quantity: Math.min(guestItem.quantity, stockCap),
-          },
-        });
-      }
+      // Relê em vez de confiar no `userCart.items` (snapshot de antes do merge começar) — sob
+      // requisições concorrentes duas chamadas podem achar "sem item existente" ao mesmo tempo.
+      const existing = await this.prisma.cartItem.findUnique({
+        where: { cartId_variantId: { cartId: userCart.id, variantId: guestItem.variantId } },
+      });
+      const targetQuantity = Math.min((existing?.quantity ?? 0) + guestItem.quantity, stockCap);
+
+      // upsert (não create) — atômico contra a unique constraint (cartId, variantId); duas
+      // requisições mesclando o mesmo guest cart em paralelo convergem pro mesmo valor final
+      // em vez de uma delas quebrar com "Unique constraint failed".
+      await this.prisma.cartItem.upsert({
+        where: { cartId_variantId: { cartId: userCart.id, variantId: guestItem.variantId } },
+        create: {
+          cartId: userCart.id,
+          productId: guestItem.productId,
+          productSlug: guestItem.productSlug,
+          productName: guestItem.productName,
+          variantId: guestItem.variantId,
+          variantSku: guestItem.variantSku,
+          variantName: guestItem.variantName,
+          attributes: guestItem.attributes ?? {},
+          image: guestItem.image,
+          unitPrice: guestItem.unitPrice,
+          promotionalPrice: guestItem.promotionalPrice,
+          quantity: targetQuantity,
+        },
+        update: { quantity: targetQuantity },
+      });
     }
 
-    await this.prisma.cart.delete({ where: { id: guestCart.id } });
+    // deleteMany em vez de delete: idempotente se uma requisição concorrente (ex.: duas chamadas
+    // de carrinho disparadas juntas logo após o login) já tiver mesclado/apagado esse guest cart.
+    await this.prisma.cart.deleteMany({ where: { id: guestCart.id } });
     return this.getCartOrThrow(userCart.id);
   }
 }

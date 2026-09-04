@@ -1,4 +1,5 @@
 import { IsISO8601, IsOptional, IsString } from 'class-validator';
+import { IsCpfCnpj } from '../../common/validators/is-cpf-cnpj.validator';
 
 export class UpdateMeDto {
   @IsOptional()
@@ -10,7 +11,7 @@ export class UpdateMeDto {
   phone?: string;
 
   @IsOptional()
-  @IsString()
+  @IsCpfCnpj()
   document?: string;
 
   @IsOptional()
