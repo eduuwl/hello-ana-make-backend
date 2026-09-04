@@ -165,8 +165,18 @@ export class CartService {
 
   async selectShipping(user: AuthenticatedUser | null, cartIdHeader: string | undefined, dto: SelectShippingDto) {
     const cart = await this.resolveCart(user, cartIdHeader);
-    const { subtotal } = await this.computeSubtotalAndLines(cart);
-    const price = this.shippingService.priceFor(dto.shippingOptionId, subtotal);
+    const { subtotal, items } = await this.computeSubtotalAndLines(cart);
+    const shippingItems = items.map((i) => ({
+      productId: i.productId,
+      variantId: i.variantId,
+      quantity: i.quantity,
+    }));
+    const price = await this.shippingService.priceFor(
+      dto.shippingOptionId,
+      subtotal,
+      dto.zipCode,
+      shippingItems,
+    );
 
     await this.prisma.cart.update({
       where: { id: cart.id },

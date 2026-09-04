@@ -207,6 +207,47 @@ export class PaymentsService {
     return toPaymentResponse(updated);
   }
 
+  /**
+   * Usado pelo `OrdersService` ao cancelar um pedido — sem isso, cancelar um
+   * pedido aqui não avisava a Asaas, e um PIX/boleto pendente continuava
+   * pagável do lado deles até vencer sozinho. Best-effort: se o gateway
+   * recusar (já pago, já vencido, etc.), loga e segue — cancelar o pedido não
+   * pode ficar refém do cancelamento no gateway ter dado certo.
+   */
+  async cancelPendingPaymentForOrder(orderId: string): Promise<void> {
+    const payment = await this.prisma.payment.findFirst({
+      where: { orderId, status: 'pending' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!payment) return;
+
+    if (payment.transactionId) {
+      try {
+        const gateway = await this.gatewayResolver.resolve();
+        await gateway.cancelPayment(payment.transactionId);
+      } catch (err) {
+        this.logger.warn(
+          `Não foi possível cancelar a cobrança no gateway ao cancelar o pedido ` +
+            `(pode já estar paga/vencida/cancelada do lado deles) — paymentId=${payment.id} ` +
+            `transactionId=${payment.transactionId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: 'cancelled', cancelledAt: new Date() },
+      }),
+      // `Order.paymentStatus` é um snapshot desnormalizado — sem isso, o pedido
+      // fica com status "cancelled" mas paymentStatus ainda "pending".
+      this.prisma.order.update({
+        where: { id: orderId },
+        data: { paymentStatus: 'cancelled' },
+      }),
+    ]);
+  }
+
   async refund(id: string, amount?: number) {
     const payment = await this.prisma.payment.findUnique({ where: { id } });
     if (!payment) {

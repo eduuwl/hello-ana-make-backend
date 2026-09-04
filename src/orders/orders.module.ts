@@ -7,9 +7,10 @@ import { CouponsModule } from '../coupons/coupons.module';
 import { ShippingModule } from '../shipping/shipping.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { RewardsModule } from '../rewards/rewards.module';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
-  imports: [AddressesModule, CouponsModule, ShippingModule, PaymentsModule, RewardsModule],
+  imports: [AddressesModule, CouponsModule, ShippingModule, PaymentsModule, RewardsModule, MailModule],
   controllers: [OrdersController, OrdersAdminController],
   providers: [OrdersService],
   exports: [OrdersService],

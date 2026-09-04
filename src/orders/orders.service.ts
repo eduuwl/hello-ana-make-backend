@@ -20,6 +20,7 @@ import { CouponsService, CouponValidationStatus } from '../coupons/coupons.servi
 import { ShippingService } from '../shipping/shipping.service';
 import { PaymentsService } from '../payments/payments.service';
 import { RewardsService } from '../rewards/rewards.service';
+import { MailService } from '../mail/mail.service';
 
 const CANCELLABLE_STATUSES: OrderStatus[] = ['pending_payment', 'paid', 'processing'];
 
@@ -76,6 +77,7 @@ export class OrdersService {
     private readonly shippingService: ShippingService,
     private readonly paymentsService: PaymentsService,
     private readonly rewardsService: RewardsService,
+    private readonly mailService: MailService,
   ) {}
 
   async create(user: AuthenticatedUser, dto: CreateOrderDto, idempotencyKey?: string) {
@@ -157,7 +159,17 @@ export class OrdersService {
       freeShipping = validation.coupon?.type === 'free_shipping';
     }
 
-    const shippingPrice = this.shippingService.priceFor(dto.shippingOptionId, subtotal);
+    const shippingItems = dto.items.map((i) => ({
+      productId: i.productId,
+      variantId: i.variantId,
+      quantity: i.quantity,
+    }));
+    const shippingPrice = await this.shippingService.priceFor(
+      dto.shippingOptionId,
+      subtotal,
+      shippingAddress.zipCode,
+      shippingItems,
+    );
     const shipping = freeShipping ? 0 : shippingPrice;
     const tax = 0;
     const total = Math.max(0, round2(subtotal - discount + shipping + tax));
@@ -239,7 +251,25 @@ export class OrdersService {
       });
     }
 
+    await this.sendOrderConfirmationEmail(user.email, order);
+
     return this.toCreateResponse(order);
+  }
+
+  private async sendOrderConfirmationEmail(email: string, order: OrderWithItems): Promise<void> {
+    const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+    const itemsHtml = order.items
+      .map(
+        (i) =>
+          `<div>${i.quantity}x ${i.productName}${i.variantName ? ` (${i.variantName})` : ''} — ${currency.format(toNumber(i.lineTotal))}</div>`,
+      )
+      .join('');
+
+    await this.mailService.sendOrderConfirmation(email, {
+      orderNumber: order.orderNumber,
+      total: currency.format(toNumber(order.total)),
+      itemsHtml,
+    });
   }
 
   async listMine(user: AuthenticatedUser, query: OrderQueryDto) {
@@ -282,12 +312,16 @@ export class OrdersService {
       throw new ApiException('Este pedido não pode ser cancelado.', 'ORDER_NOT_CANCELLABLE', 422);
     }
 
-    const updated = await this.releaseStockAndUpdate(order, {
+    await this.releaseStockAndUpdate(order, {
       status: 'cancelled',
       cancelledAt: new Date(),
       notes: dto.reason ? this.appendNote(order.notes, `Cancelado: ${dto.reason}`) : undefined,
     });
-    return toOrderResponse(updated);
+    await this.paymentsService.cancelPendingPaymentForOrder(order.id);
+    // Re-busca em vez de devolver o snapshot de `releaseStockAndUpdate` — esse
+    // snapshot é de antes de cancelar o pagamento, então `paymentStatus` viria
+    // desatualizado na resposta mesmo já correto no banco.
+    return toOrderResponse(await this.findByIdOrThrow(order.id));
   }
 
   async adminList(query: AdminOrderQueryDto) {
@@ -345,6 +379,13 @@ export class OrdersService {
     const updated = releaseStock
       ? await this.releaseStockAndUpdate(order, data)
       : await this.prisma.order.update({ where: { id }, data, include: { items: true } });
+
+    if (releaseStock) {
+      await this.paymentsService.cancelPendingPaymentForOrder(order.id);
+      // Mesmo motivo do `cancel()` acima: `updated` é de antes do paymentStatus
+      // ser atualizado.
+      return toOrderResponse(await this.findByIdOrThrow(order.id));
+    }
 
     return toOrderResponse(updated);
   }

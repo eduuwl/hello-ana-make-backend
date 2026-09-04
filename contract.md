@@ -40,13 +40,41 @@ wrapper HTTP compartilhado (base URL, `Authorization`, parse de erro, refresh au
    nenhum fallback caso o usuário não tenha endereço com CEP/número preenchidos além de retornar
    erro (ver seção 12.3).
 2. **Frete — envio/rastreio real** (seção 7): `POST /shipping/shipments`, `GET
-   /shipping/tracking/:code`, cancelamento de remessa. Sem isso, o pedido nunca ganha
-   `trackingCode`/`trackingUrl` de verdade — hoje só o admin preenche isso manualmente via `PATCH
-   /admin/orders/:id/status`. Cotação (`POST /shipping/quote`) já é real, só a integração
-   SuperFrete que é mock.
-3. **E-mail transacional** (seção 2): `forgot-password` só loga o token no console, não envia
-   e-mail de verdade. Mesmo problema provavelmente vale pra confirmação de pedido/pagamento —
-   nenhum e-mail é enviado por nada neste backend hoje.
+   /shipping/tracking/:code`, cancelamento de remessa continuam não implementados — sem isso, o
+   pedido nunca ganha `trackingCode`/`trackingUrl` de verdade, hoje só o admin preenche isso
+   manualmente via `PATCH /admin/orders/:id/status`. Escopo continua sendo só compra de etiqueta
+   (gasta saldo real na SuperFrete), fora do que foi pedido pro deadline.
+   ~~**Cotação era sempre simulada**~~ ✅ Resolvido — `ShippingService` agora consulta a
+   calculadora real da SuperFrete (`POST /api/v0/calculator`, confirmado contra a doc oficial)
+   quando `integrations.shippingProvider === "superfrete"` e há `superfreteToken`; sem isso,
+   cai automaticamente na tabela mock de sempre (testado: token inválido → 401 → warning no log
+   → fallback pro mock, sem quebrar nada). Usa `StoreSettings.shipping.originZipCode` +
+   `defaultWeightGrams/Width/Height/Length` como pacote — **não há peso/dimensão por produto no
+   banco ainda**, então todo pedido é cotado como um pacote padrão da loja (configurável em
+   Admin > Configurações), não a soma real dos itens. `POST /shipping/quote`,
+   `PUT /cart/shipping` e a criação do pedido (`OrdersService#create`) foram todos ligados na
+   mesma fonte — o preço final cobrado é recalculado ao vivo na criação do pedido em vez de
+   confiar no que o cliente viu na cotação (necessário porque os IDs de opção da SuperFrete são
+   dinâmicos, ao contrário do catálogo fixo do mock). Testado de ponta a ponta:
+   `PUT /cart/shipping` com token inválido configurado, respondeu normal com o preço mock
+   (fallback confirmado). **Falta pro Sunday**: configurar `superfreteToken` de verdade em
+   Admin > Configurações > Integrações — sem isso, frete continua simulado (não quebra nada).
+3. ~~**E-mail transacional**~~ ✅ Resolvido — criei `MailModule`/`MailService`
+   (`src/mail/`), envio via API REST do Resend (`fetch`, sem SDK novo, mesmo estilo do
+   `AsaasPaymentGateway`), lendo `RESEND_API_KEY`/`MAIL_FROM` do `ConfigService`. Sem
+   `RESEND_API_KEY` configurada, `send()` só loga um warning e segue — nunca lança, nunca
+   bloqueia cadastro/pedido/reset de senha (testado de ponta a ponta:
+   `POST /auth/forgot-password` respondeu normal e logou o warning esperado). Ligado em dois
+   pontos: `AuthService#forgotPassword` (link `${FRONTEND_URL}/redefinir-senha?token=...`) e
+   `OrdersService#create` (confirmação de pedido, fire-and-forget após a criação). **Gap
+   relacionado que também resolvi**: o frontend só tinha a tela de *pedir* o link
+   (`/recuperar-senha`) — não existia nenhuma tela pra *consumir* o token e trocar a senha, então
+   o link do e-mail cairia num beco sem saída. Criei
+   `src/app/(auth)/redefinir-senha/page.tsx` (lê `?token=`, chama
+   `POST /auth/reset-password`) e adicionei `authService.resetPassword`/`useAuth().resetPassword`
+   que faltavam na camada de serviço/hook do frontend. **Falta pro Sunday**: você mesmo
+   adicionar `RESEND_API_KEY` (e opcionalmente `MAIL_FROM`) no `.env` do backend — sem isso o
+   fluxo continua funcionando (não quebra nada), só não manda e-mail de verdade.
 4. ~~**`/favorites` sem `promotion`**~~ ✅ Resolvido — `favorites.service.ts` agora chama
    `promotionsService.resolveActiveForProducts` igual ao `products.service.ts`, testado e
    confirmado retornando `promotion` populado em `GET /favorites`.
@@ -68,6 +96,15 @@ wrapper HTTP compartilhado (base URL, `Authorization`, parse de erro, refresh au
    é só reduzir a chance, não elimina: uma solução completa exigiria idempotência de verdade
    (ex.: salvar o `transactionId` *antes* de chamar o gateway, ou reconciliação via webhook
    independente da resposta síncrona). Vale priorizar isso antes de depender pesado de produção.
+7. ~~**Cancelar pedido não cancelava a cobrança no gateway**~~ ✅ Resolvido —
+   `orders.service.ts#cancel()`/`#updateStatus()` (transição pra `cancelled`) só atualizavam o
+   pedido aqui; um PIX/boleto pendente continuava pagável na Asaas até vencer sozinho. Adicionei
+   `PaymentsService.cancelPendingPaymentForOrder(orderId)`, chamado nos dois pontos — best-effort
+   (se o gateway recusar, ex. já pago/vencido, só loga e segue, não trava o cancelamento do
+   pedido) e atualiza `Order.paymentStatus` junto (esse campo é um snapshot desnormalizado do
+   `Payment.status`, ficava dessincronizado sem isso). Testado de ponta a ponta contra a Asaas de
+   produção de verdade (criei cobrança real, cancelei pelo pedido, confirmei `status: cancelled`
+   tanto no `Payment` quanto na resposta imediata do endpoint).
 
 ---
 

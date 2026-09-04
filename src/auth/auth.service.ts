@@ -17,6 +17,7 @@ import { LoginDto } from './dto/login.dto';
 import { UpdateMeDto } from './dto/update-me.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SettingsService } from '../settings/settings.service';
+import { MailService } from '../mail/mail.service';
 
 export interface AuthSession {
   user: PublicUser;
@@ -35,6 +36,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly settingsService: SettingsService,
+    private readonly mailService: MailService,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthSession> {
@@ -149,9 +151,9 @@ export class AuthService {
       },
     });
 
-    // TODO: integrar provedor de e-mail (SES/Resend/Postmark) para enviar rawToken por link.
-    // eslint-disable-next-line no-console
-    console.log(`[auth] reset token para ${user.email}: ${rawToken}`);
+    const frontendUrl = this.config.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    const resetUrl = `${frontendUrl}/redefinir-senha?token=${rawToken}`;
+    await this.mailService.sendPasswordReset(user.email, resetUrl);
   }
 
   async resetPassword(dto: ResetPasswordDto): Promise<void> {
