@@ -106,9 +106,34 @@ wrapper HTTP compartilhado (base URL, `Authorization`, parse de erro, refresh au
    produção de verdade (criei cobrança real, cancelei pelo pedido, confirmei `status: cancelled`
    tanto no `Payment` quanto na resposta imediata do endpoint).
 
+**As seções 1-17 abaixo já foram conferidas contra o código atual e corrigidas onde tinham ficado
+desatualizadas** (o `forgot-password` da seção 2 e a seção 7 inteira de frete estavam descrevendo
+o comportamento antigo, pré-Resend/pré-SuperFrete — já corrigido).
+
 ---
 
 ## 1. Convenções gerais
+
+### Variáveis de ambiente
+
+`.env.example` já está atualizado e é a fonte da verdade — resumo do que cada uma faz:
+
+| Variável | Onde é usada | Obrigatória? |
+|---|---|---|
+| `DATABASE_URL`, `DIRECT_URL` | Prisma/Neon | sim |
+| `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | auth | sim |
+| `CORS_ORIGIN` | CORS | sim |
+| `FRONTEND_URL` | monta o link de `/redefinir-senha?token=...` no e-mail de reset | sim, se for usar o fluxo de reset por e-mail |
+| `RESEND_API_KEY`, `MAIL_FROM` | envio de e-mail transacional (Resend) | não — sem ela, e-mails só logam um warning e não bloqueiam nada |
+| `PAYMENT_WEBHOOK_SECRET` | valida `X-Webhook-Secret`/`asaas-access-token` no webhook | sim, se for usar Asaas de verdade |
+| `ASAAS_API_URL` | só a URL base (sandbox/produção) | não (default sandbox) |
+| `SUPERFRETE_API_URL` | só a URL base (sandbox/produção) | não (default sandbox) |
+
+**Pegadinha**: `ASAAS_API_KEY` **não existe mais como env var** — nem `SUPERFRETE_TOKEN`. A chave
+do Asaas e o token da SuperFrete moram em `StoreSettings.integrations` (banco), configuráveis só
+via `PATCH /admin/settings/integrations` (seção 13), não no `.env`. Mesma coisa pro cupom de
+boas-vindas (`signupPromotion`, seção 13) — não é mais env var, é `StoreSettings` via
+`PUT /admin/settings`. Se você for "ajeitar a env com o que falta", esses três **não vão lá**.
 
 - **Base URL**: todas as rotas abaixo, exceto upload de arquivos servidos estaticamente (seção 15),
   ficam sob o prefixo `/api/v1` (`app.setGlobalPrefix('api/v1')`, `src/main.ts`). Local:
@@ -154,8 +179,15 @@ wrapper HTTP compartilhado (base URL, `Authorization`, parse de erro, refresh au
 | GET | `/auth/signup-promotion` | — | — | ver abaixo |
 
 `RegisterDto`: `email, password, name` (required), `phone?, document?, birthDate?` (ISO date),
-`acceptMarketing?: boolean`, **`acceptTerms: true` obrigatório** (senão `422 VALIDATION_ERROR`
-em `acceptTerms`). E-mail duplicado → `409 CONFLICT`.
+`acceptMarketing?: boolean`, `referralCode?: string` (**aceito mas ainda não usado em nenhuma
+lógica** — não existe programa de indicação implementado, não confie nesse campo fazer algo),
+**`acceptTerms: true` obrigatório** (senão `422 VALIDATION_ERROR` em `acceptTerms`). E-mail
+duplicado → `409 CONFLICT`.
+
+`document` (aqui, em `PATCH /auth/me` e em `StoreSettings.store.document`), quando enviado, é
+validado de verdade (CPF de 11 dígitos ou CNPJ de 14, com dígito verificador — com ou sem
+máscara): valor com dígito verificador incorreto → `422 VALIDATION_ERROR` em `document`. Não
+manda um CPF placeholder tipo `11111111111`/`12345678901`, é rejeitado.
 
 `LoginDto`: `email, password, rememberMe?: boolean`. Credenciais inválidas → `401 INVALID_CREDENTIALS`.
 
@@ -179,16 +211,23 @@ pelo admin), **não** env var:
 { success: true, message: string, couponCode: string, discountPercentage: number }
 ```
 
-`forgot-password` **não envia e-mail de verdade ainda** — só loga o token no console do servidor
-(TODO conhecido, precisa de Resend/SES/Postmark antes de produção).
+`forgot-password` **envia e-mail de verdade** via Resend (`MailService`, seção 1 — precisa de
+`RESEND_API_KEY` configurada, senão só loga um warning e segue sem erro nenhum pro client). O
+e-mail linka pra `${FRONTEND_URL}/redefinir-senha?token=<rawToken>` — o frontend precisa ter essa
+rota implementada (lê `?token=` da URL e chama `POST /auth/reset-password`).
 
 ---
 
 ## 3. Catálogo
 
 ### Categorias (`/categories`, público)
-- `GET /categories?tree=true|false` — `tree=true` retorna `{ items: CategoryTreeResponse[] }`
-  (só raízes, com `children` aninhado); senão `{ items: CategoryResponse[] }` (lista flat).
+- `GET /categories?tree=true|false&includeInactive=true|false` (`CategoryQueryDto`, também aceita
+  `flat`, sinônimo de `tree=false` sem efeito adicional) — `tree=true` retorna
+  `{ items: CategoryTreeResponse[] }` (só raízes, com `children` aninhado); senão
+  `{ items: CategoryResponse[] }` (lista flat). `includeInactive=true` inclui categorias com
+  `isActive: false` — **atenção**: essa rota é pública, sem `Bearer`, então `includeInactive=true`
+  funciona sem autenticação nenhuma (não é um filtro admin protegido; se isso for sensível, use
+  `admin/categories`, que é paginado e exige `role=admin`, para telas de administração).
 - `GET /categories/:slug` → `CategoryResponse`, 404 se não achar.
 
 ```ts
@@ -343,26 +382,54 @@ aplicação no carrinho.
 
 ## 7. Frete (`/shipping`)
 
-- `POST /shipping/quote` — público. Body: `{ zipCode: string, subtotal?: number }`. →
-  ```ts
-  { zipCode: string /* 8 dígitos, sem máscara */, quotedAt: string,
-    options: { id: string, provider: string, serviceName: string, serviceCode: string,
-      price: number, currency: 'BRL', estimatedDaysMin: number, estimatedDaysMax: number,
-      isFree: boolean }[] }
-  ```
-  CEP inválido (≠ 8 dígitos após remover não-dígitos) → `422 INVALID_ZIP_CODE`.
+### `POST /shipping/quote` — público
+```ts
+// Body — ATENÇÃO: `items` é obrigatório (mín. 1), diferente do que uma versão anterior deste doc dizia
+{
+  zipCode: string,
+  items: { productId: string, variantId: string, quantity: number,
+    weightGrams?: number, widthCm?: number, heightCm?: number, lengthCm?: number }[],
+  subtotal?: number,
+}
+```
+```ts
+// Resposta
+{ zipCode: string /* 8 dígitos, sem máscara */, quotedAt: string,
+  options: { id: string, provider: string, serviceName: string, serviceCode: string,
+    price: number, currency: 'BRL', estimatedDaysMin: number, estimatedDaysMax: number,
+    isFree: boolean }[] }
+```
+CEP inválido (≠ 8 dígitos após remover não-dígitos) → `422 INVALID_ZIP_CODE`. `items` vazio →
+`422 VALIDATION_ERROR`. `weightGrams`/`*Cm` por item são opcionais — se omitidos, usa o pacote
+padrão configurado em `StoreSettings.shipping` (seção 13); não há peso/dimensão por produto no
+banco ainda, então na prática quase sempre cai no default da loja mesmo informando cada item.
 
-**Mock, 3 opções fixas** (`id` é o que você manda depois em `PUT /cart/shipping` e
-`POST /orders`): `ship-pac` (Correios PAC, grátis acima de R$149), `ship-sedex` (Correios SEDEX,
-grátis acima de R$249), `ship-expressa` (SuperFrete, nunca grátis). **Não há integração real com
-SuperFrete ainda** — trocar isso é só reescrever `shipping.service.ts#quote` no backend, a
-interface pública não muda.
+### Dois modos, escolhidos por `StoreSettings.integrations.shippingProvider` (admin, seção 13)
 
-**Não implementado no backend**: `POST /shipping/shipments` (criar remessa), `GET
-/shipping/tracking/:code`, cancelamento de remessa. Se `ShippingRepository.createShipment/
-getTracking/cancelShipment` forem chamados, não têm endpoint correspondente ainda — não
-implemente essas três no `ApiShippingRepository`/`SuperFreteShippingRepository` até o backend
-expor as rotas.
+- **`"mock"` (padrão)** — 3 opções fixas, **`id` estável**: `ship-pac` (Correios PAC, grátis acima
+  de R$149), `ship-sedex` (Correios SEDEX, grátis acima de R$249), `ship-expressa` (SuperFrete,
+  nunca grátis).
+- **`"superfrete"` com `integrations.superfreteToken` configurado** — cotação real via API da
+  SuperFrete (`POST /api/v0/calculator`). **`id` é dinâmico**: `` `sf-${serviceId}` `` (ex.:
+  `sf-1` = Correios PAC, `sf-2` = Correios SEDEX — os únicos serviços cotados hoje), preço e prazo
+  vêm da resposta deles em tempo real. Se a chamada falhar por qualquer motivo (token inválido,
+  erro de rede, resposta sem opção válida), **cai automaticamente pro mock acima** — nunca quebra
+  o checkout, só loga um warning no servidor.
+
+**Não hardcode `ship-pac`/`ship-sedex`/`ship-expressa` no frontend** — sempre use o `id` que veio
+na resposta do `POST /shipping/quote` mais recente, porque pode ser um `sf-N` dependendo da
+configuração do admin no momento.
+
+`PUT /cart/shipping` e `POST /orders` **não mudaram** — seus bodies continuam só `{
+shippingOptionId, zipCode }` e `{ ..., shippingOptionId }` respectivamente (sem `items`); o
+backend já sabe os itens do carrinho/pedido e recalcula o preço sozinho com a mesma lógica acima
+antes de gravar — nunca confia no preço que a tela mostrou no `quote()`.
+
+**Não implementado no backend**: `POST /shipping/shipments` (criar remessa / comprar etiqueta),
+`GET /shipping/tracking/:code`, cancelamento de remessa. `Order.trackingCode`/`trackingUrl` só são
+preenchidos manualmente pelo admin hoje (`PATCH /admin/orders/:id/status`). Não implemente
+`ShippingRepository.createShipment/getTracking/cancelShipment` no frontend até o backend expor
+essas rotas.
 
 ---
 
@@ -388,7 +455,10 @@ mostrar badge de desconto, essa tela de favoritos não vai mostrar). `POST` com 
 
 - `GET /promotions?activeOnly=true|false&type=...` → `{ items: PromotionResponse[] }`,
   `activeOnly` default `true` (omitir o param também filtra só ativas — só manda tudo se
-  `activeOnly=false` explicitamente).
+  `activeOnly=false` explicitamente). **Atenção**: essa rota é pública, sem `Bearer` — igual
+  `/categories` (seção 3), `activeOnly=false` funciona sem autenticação, expondo promoções
+  inativas/futuras pra qualquer visitante; pra tela de admin use `admin/promotions` (paginado,
+  exige `role=admin`).
 - `GET /promotions/:slug` → `PromotionResponse`, 404 se não achar.
 - `POST /promotions/preview` (200) — Body: `{ items: { productId, variantId, quantity }[] }`
   (ex.: itens do carrinho). → simula quais promoções se aplicariam:
@@ -477,6 +547,10 @@ seção 12). Para `credit_card`, o pedido nasce sem `payment`; o frontend precis
 Erros: `404` (endereço ou `shippingOptionId` inválidos), `409`/`422 STOCK_UNAVAILABLE`,
 `422 COUPON_*` (mesmos códigos da seção 6), `422 VALIDATION_ERROR` (pedido sem itens).
 
+Em caso de sucesso, um e-mail de confirmação é disparado pro usuário (fire-and-forget, via
+`MailService` — nunca falha nem atrasa a resposta de `POST /orders`, mesmo sem
+`RESEND_API_KEY` configurada).
+
 ### Outras rotas
 | Método | Rota | Resposta |
 |---|---|---|
@@ -486,7 +560,10 @@ Erros: `404` (endereço ou `shippingOptionId` inválidos), `409`/`422 STOCK_UNAV
 | POST | `/orders/:id/cancel` | Body `{ reason?: string }` → `Order` |
 
 Cancelamento só permitido se `status ∈ {pending_payment, paid, processing}`, senão
-`422 ORDER_NOT_CANCELLABLE`. Cancelar devolve o estoque reservado.
+`422 ORDER_NOT_CANCELLABLE`. Cancelar devolve o estoque reservado **e** tenta cancelar qualquer
+pagamento `pending` associado no gateway (Pix/boleto ainda não pagos) — best-effort: se o gateway
+recusar (ex.: já foi pago do lado deles), só loga e segue, o pedido cancela normalmente mesmo
+assim. `Order.paymentStatus` na resposta já reflete isso.
 
 ```ts
 Order: {

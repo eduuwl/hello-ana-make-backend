@@ -200,10 +200,18 @@ export class PaymentsService {
       const gateway = await this.gatewayResolver.resolve();
       await gateway.cancelPayment(payment.transactionId);
     }
-    const updated = await this.prisma.payment.update({
-      where: { id },
-      data: { status: 'cancelled', cancelledAt: new Date() },
-    });
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.payment.update({
+        where: { id },
+        data: { status: 'cancelled', cancelledAt: new Date() },
+      }),
+      // Mesmo motivo do `cancelPendingPaymentForOrder`: sem isso, `Order.paymentStatus`
+      // (snapshot desnormalizado) fica desatualizado em relação ao `Payment.status` real.
+      this.prisma.order.update({
+        where: { id: payment.orderId },
+        data: { paymentStatus: 'cancelled' },
+      }),
+    ]);
     return toPaymentResponse(updated);
   }
 
@@ -221,16 +229,20 @@ export class PaymentsService {
     });
     if (!payment) return;
 
+    // Só marcamos como cancelado localmente se o gateway confirmar — senão o banco
+    // afirma "cancelado" pro admin enquanto a cobrança real continua aberta (ou já
+    // paga) na Asaas, e ninguém fica sabendo que precisa cancelar na mão lá.
     if (payment.transactionId) {
       try {
         const gateway = await this.gatewayResolver.resolve();
         await gateway.cancelPayment(payment.transactionId);
       } catch (err) {
-        this.logger.warn(
-          `Não foi possível cancelar a cobrança no gateway ao cancelar o pedido ` +
-            `(pode já estar paga/vencida/cancelada do lado deles) — paymentId=${payment.id} ` +
-            `transactionId=${payment.transactionId}: ${err instanceof Error ? err.message : String(err)}`,
+        this.logger.error(
+          `CANCELAMENTO NO GATEWAY FALHOU — cobrança continua aberta na Asaas, reconciliar ` +
+            `manualmente. orderId=${orderId} paymentId=${payment.id} transactionId=${payment.transactionId}: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
         );
+        return;
       }
     }
 
