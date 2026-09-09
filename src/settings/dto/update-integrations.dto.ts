@@ -16,4 +16,12 @@ export class UpdateIntegrationsDto {
   @IsOptional()
   @IsString()
   superfreteToken?: string;
+
+  @IsOptional()
+  @IsString()
+  instagramAccessToken?: string;
+
+  @IsOptional()
+  @IsString()
+  instagramUserId?: string;
 }

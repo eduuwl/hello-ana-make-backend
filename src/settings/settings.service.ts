@@ -33,6 +33,7 @@ export class SettingsService {
       },
       rewards: data.rewards,
       signupPromotion: data.signupPromotion,
+      homepage: data.homepage,
       currency: data.currency,
     };
   }
@@ -69,6 +70,15 @@ export class SettingsService {
         shippingProvider: dto.shippingProvider ?? current.integrations.shippingProvider,
         asaasApiKey: dto.asaasApiKey ?? current.integrations.asaasApiKey,
         superfreteToken: dto.superfreteToken ?? current.integrations.superfreteToken,
+        instagramUserId: dto.instagramUserId ?? current.integrations.instagramUserId,
+        instagramAccessToken:
+          dto.instagramAccessToken ?? current.integrations.instagramAccessToken,
+        // Um token colado manualmente pelo admin é sempre de curta duração (o fluxo de troca por
+        // long-lived exige o app secret, que só o InstagramService tem) — zera o timestamp pra
+        // forçar a próxima chamada a trocá-lo antes de usar (ver InstagramService#ensureLongLivedToken).
+        instagramTokenRefreshedAt: dto.instagramAccessToken
+          ? undefined
+          : current.integrations.instagramTokenRefreshedAt,
       },
     };
 
@@ -82,8 +92,28 @@ export class SettingsService {
       shippingProvider: data.integrations.shippingProvider,
       asaasApiKey: maskSecret(data.integrations.asaasApiKey),
       superfreteToken: maskSecret(data.integrations.superfreteToken),
+      instagramUserId: data.integrations.instagramUserId,
+      instagramAccessToken: maskSecret(data.integrations.instagramAccessToken),
       updatedAt: updated.updatedAt.toISOString(),
     };
+  }
+
+  /** Uso interno do InstagramService após trocar/renovar o token — nunca exposto via HTTP direto. */
+  async persistInstagramToken(accessToken: string): Promise<void> {
+    const row = await this.getOrCreateRow();
+    const current = row.data as unknown as StoreSettings;
+    const merged: StoreSettings = {
+      ...current,
+      integrations: {
+        ...current.integrations,
+        instagramAccessToken: accessToken,
+        instagramTokenRefreshedAt: new Date().toISOString(),
+      },
+    };
+    await this.prisma.storeSettings.update({
+      where: { id: row.id },
+      data: { data: merged as unknown as Prisma.InputJsonValue },
+    });
   }
 
   private toMaskedResponse(row: StoreSettingsRow): StoreSettings {

@@ -112,6 +112,16 @@ class UpdateRewardsGroupDto {
   enabled?: boolean;
 }
 
+class UpdateHomepageGroupDto {
+  @IsOptional()
+  @IsString()
+  heroImage?: string;
+
+  @IsOptional()
+  @IsString()
+  campaignImage?: string;
+}
+
 class UpdateSignupPromotionGroupDto {
   @IsOptional()
   @IsBoolean()
@@ -156,6 +166,11 @@ export class UpdateStoreSettingsDto {
   @ValidateNested()
   @Type(() => UpdateRewardsGroupDto)
   rewards?: UpdateRewardsGroupDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => UpdateHomepageGroupDto)
+  homepage?: UpdateHomepageGroupDto;
 
   @IsOptional()
   @ValidateNested()

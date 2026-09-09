@@ -35,11 +35,23 @@ export interface StoreSettings {
     message: string;
     expiresAt?: string;
   };
+  // Imagens da home, editáveis pelo admin sem precisar mexer em código
+  // (docs/03-catalogo.md não cobre isso — é conteúdo de vitrine, não catálogo).
+  homepage: {
+    heroImage: string;
+    campaignImage: string;
+  };
   integrations: {
     paymentGateway: string;
     shippingProvider: string;
     asaasApiKey?: string;
     superfreteToken?: string;
+    instagramAccessToken?: string;
+    instagramUserId?: string;
+    // Preenchido/atualizado sozinho pelo InstagramService a cada refresh do token
+    // (docs Meta: long-lived token dura 60 dias, refresh estende por mais 60 a partir da data
+    // do refresh) — não editável pelo admin diretamente.
+    instagramTokenRefreshedAt?: string;
   };
   currency: 'BRL';
   timezone: string;
@@ -51,6 +63,7 @@ export type PublicStoreSettings = Pick<StoreSettings, 'currency'> & {
   checkout: Pick<StoreSettings['checkout'], 'enabledPaymentMethods' | 'maxInstallments'>;
   rewards: StoreSettings['rewards'];
   signupPromotion: StoreSettings['signupPromotion'];
+  homepage: StoreSettings['homepage'];
 };
 
 // docs/15-configuracoes.md → valores default single-tenant.
@@ -87,6 +100,10 @@ export const DEFAULT_STORE_SETTINGS: Omit<StoreSettings, 'updatedAt'> = {
     couponCode: 'BEMVINDA10',
     discountPercentage: 10,
     message: 'Cadastre-se e ganhe 10% de desconto na primeira compra.',
+  },
+  homepage: {
+    heroImage: 'https://images.unsplash.com/photo-1596462502278-27bfdc403348?w=1800&h=1200&fit=crop',
+    campaignImage: 'https://picsum.photos/seed/hello-ana-campaign/1400/500',
   },
   integrations: {
     paymentGateway: 'mock',
