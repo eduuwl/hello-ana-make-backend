@@ -30,6 +30,12 @@ function flattenValidationErrors(
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
+  // Necessário pra `req.protocol` refletir o "X-Forwarded-Proto" do proxy reverso
+  // (Render, etc.) em vez de sempre reportar "http" — usado em UploadsController
+  // pra montar a URL absoluta do upload sem depender de uma env var (APP_BASE_URL)
+  // que fica desatualizada se o domínio mudar.
+  app.set('trust proxy', 1);
+
   app.use(helmet());
   app.enableCors({
     origin: process.env.CORS_ORIGIN?.split(',') ?? true,
