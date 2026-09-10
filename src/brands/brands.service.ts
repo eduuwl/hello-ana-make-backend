@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { NotFoundApiException } from '../common/exceptions/common.exceptions';
+import {
+  ConflictApiException,
+  NotFoundApiException,
+} from '../common/exceptions/common.exceptions';
 import { ApiException } from '../common/exceptions/api.exception';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { paginate } from '../common/dto/paginated-response.dto';
@@ -41,16 +44,28 @@ export class BrandsService {
   }
 
   async create(dto: UpsertBrandDto) {
-    const brand = await this.prisma.brand.create({
-      data: {
-        slug: dto.slug,
-        name: dto.name,
-        description: dto.description,
-        logo: dto.logo,
-        website: dto.website,
-        isActive: dto.isActive ?? true,
-      },
-    });
+    const data = {
+      slug: dto.slug,
+      name: dto.name,
+      description: dto.description,
+      logo: dto.logo,
+      website: dto.website,
+      isActive: dto.isActive ?? true,
+    };
+
+    // `slug` é @unique e o "excluir" é soft-delete (isActive=false) — o slug fica
+    // reservado. Se já existe uma marca inativa com esse slug, "recriar" reativa e
+    // sobrescreve os dados em vez de estourar um 409 sem saída pro admin.
+    const existing = await this.prisma.brand.findUnique({ where: { slug: dto.slug } });
+    if (existing) {
+      if (existing.isActive) {
+        throw new ConflictApiException('Já existe uma marca com esse slug.', 'BRAND_SLUG_TAKEN');
+      }
+      const revived = await this.prisma.brand.update({ where: { id: existing.id }, data });
+      return toBrandResponse(revived);
+    }
+
+    const brand = await this.prisma.brand.create({ data });
     return toBrandResponse(brand);
   }
 

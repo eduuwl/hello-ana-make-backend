@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { Category as CategoryModel } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { NotFoundApiException } from '../common/exceptions/common.exceptions';
+import {
+  ConflictApiException,
+  NotFoundApiException,
+} from '../common/exceptions/common.exceptions';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { paginate } from '../common/dto/paginated-response.dto';
 import { CategoryQueryDto } from './dto/category-query.dto';
@@ -64,17 +67,32 @@ export class CategoriesService {
   }
 
   async create(dto: UpsertCategoryDto): Promise<CategoryResponse> {
-    const category = await this.prisma.category.create({
-      data: {
-        slug: dto.slug,
-        name: dto.name,
-        description: dto.description ?? '',
-        image: dto.image ?? '',
-        parentId: dto.parentId,
-        isActive: dto.isActive ?? true,
-        sortOrder: dto.sortOrder ?? 0,
-      },
-    });
+    const data = {
+      slug: dto.slug,
+      name: dto.name,
+      description: dto.description ?? '',
+      image: dto.image ?? '',
+      parentId: dto.parentId,
+      isActive: dto.isActive ?? true,
+      sortOrder: dto.sortOrder ?? 0,
+    };
+
+    // `slug` é @unique e o "excluir" é soft-delete (isActive=false) — o slug fica
+    // reservado. Se já existe uma categoria inativa com esse slug, "recriar" reativa
+    // e sobrescreve os dados em vez de estourar um 409 sem saída pro admin.
+    const existing = await this.prisma.category.findUnique({ where: { slug: dto.slug } });
+    if (existing) {
+      if (existing.isActive) {
+        throw new ConflictApiException(
+          'Já existe uma categoria com esse slug.',
+          'CATEGORY_SLUG_TAKEN',
+        );
+      }
+      const revived = await this.prisma.category.update({ where: { id: existing.id }, data });
+      return toCategoryResponse(revived);
+    }
+
+    const category = await this.prisma.category.create({ data });
     return toCategoryResponse(category);
   }
 
