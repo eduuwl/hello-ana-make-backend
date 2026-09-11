@@ -70,7 +70,7 @@ export type PublicStoreSettings = Pick<StoreSettings, 'currency'> & {
 export const DEFAULT_STORE_SETTINGS: Omit<StoreSettings, 'updatedAt'> = {
   store: {
     name: 'Hello Ana Make',
-    email: 'contato@helloanamake.com',
+    email: 'helloanamakeup@gmail.com',
     phone: '91981136250',
     instagramUrl: 'https://instagram.com/helloanamake',
   },
