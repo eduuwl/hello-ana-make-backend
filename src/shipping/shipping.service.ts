@@ -174,7 +174,9 @@ export class ShippingService {
     subtotal: number,
   ): Promise<ShippingOptionResult[]> {
     const { shipping, integrations, store } = settings;
-    const baseUrl = this.config.get<string>('SUPERFRETE_API_URL', 'https://sandbox.superfrete.com');
+    // Default: produção. Pra usar o sandbox, setar SUPERFRETE_API_URL=https://sandbox.superfrete.com
+    // no ambiente (o token também precisa ser o de sandbox).
+    const baseUrl = this.config.get<string>('SUPERFRETE_API_URL', 'https://api.superfrete.com');
 
     const products =
       items.length > 0

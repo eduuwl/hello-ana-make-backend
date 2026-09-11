@@ -252,7 +252,10 @@ export class AsaasPaymentGateway implements PaymentGateway {
         500,
       );
     }
-    const baseUrl = this.config.get('ASAAS_API_URL', 'https://api-sandbox.asaas.com/v3');
+    // Default: produção. Pra usar o sandbox, setar ASAAS_API_URL=https://api-sandbox.asaas.com/v3
+    // no ambiente (a chave também precisa ser a de sandbox — os dois ambientes do Asaas são
+    // totalmente separados; chave de um lado no endpoint do outro → "chave não pertence a este ambiente").
+    const baseUrl = this.config.get('ASAAS_API_URL', 'https://api.asaas.com/v3');
 
     const response = await fetch(`${baseUrl}${path}`, {
       method,
