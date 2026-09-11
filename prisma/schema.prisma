@@ -540,3 +540,14 @@ model Payment {
   @@index([orderId])
   @@map("payments")
 }
+
+// Inscrição na newsletter (rodapé/home) — separado de User.acceptMarketing porque não exige
+// conta: qualquer visitante pode assinar sem se cadastrar.
+model NewsletterSubscriber {
+  id    String @id @default(uuid())
+  email String @unique
+
+  createdAt DateTime @default(now())
+
+  @@map("newsletter_subscribers")
+}

@@ -9,6 +9,7 @@ export interface PublicUser {
   avatarUrl: string | null;
   birthDate: string | null;
   emailVerified: boolean;
+  acceptMarketing: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -23,6 +24,7 @@ export function toPublicUser(user: UserModel): PublicUser {
     avatarUrl: user.avatarUrl,
     birthDate: user.birthDate ? user.birthDate.toISOString() : null,
     emailVerified: user.emailVerified,
+    acceptMarketing: user.acceptMarketing,
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),
   };

@@ -110,6 +110,32 @@ wrapper HTTP compartilhado (base URL, `Authorization`, parse de erro, refresh au
 desatualizadas** (o `forgot-password` da seção 2 e a seção 7 inteira de frete estavam descrevendo
 o comportamento antigo, pré-Resend/pré-SuperFrete — já corrigido).
 
+### Atualização de 10/setembro — o que mudou desde a última revisão
+
+- **Feed do Instagram na home** — novo, ver seção 13.1 (`GET /instagram/feed`, público).
+- **Imagens da home editáveis pelo admin** — `StoreSettings.homepage` (`heroImage`/`campaignImage`),
+  ver seção 13. Antes eram hardcoded no frontend.
+- **Categoria/marca "recriada" com slug de um item soft-deletado** — antes estourava `500` (conflito
+  de índice único no Postgres); agora reativa e sobrescreve os dados. Ver seção 3.
+- **Erros do Prisma mapeados pro contrato de erro padrão** — conflito de unicidade, registro não
+  encontrado e violação de FK agora voltam como `409`/`404` no formato `{message, code, errors}` em
+  vez de vazar um `500` genérico. Ver seção 1.
+- **`ASAAS_API_URL`/`SUPERFRETE_API_URL` agora fazem default pra produção**, não mais sandbox — ver
+  seção 1. Isso importa pro frontend só indiretamente (é infra do backend), mas explica por que uma
+  cobrança criada num ambiente e cancelada depois com a env var trocada dá `401` do gateway — chave
+  e URL precisam ser do mesmo ambiente (sandbox+sandbox ou produção+produção).
+- **URL de upload agora vem do próprio request**, não de uma env var fixa — sem mudança de contrato
+  pro frontend (seção 15), só ficou mais robusto atrás de proxy reverso (Render etc.).
+
+### Atualização de 11/setembro
+
+- **`PATCH /auth/me` agora aceita `acceptMarketing?: boolean`** e `PublicUser` passa a incluir
+  `acceptMarketing: boolean` — antes só dava pra definir no cadastro (`RegisterDto`), sem jeito
+  nenhum de mudar depois nem de saber o valor atual pelo `GET/PATCH /auth/me`. Ver seção 2. A tela
+  "Receber novidades por e-mail" em Conta > Configurações não salvava nada até essa mudança.
+- **Newsletter pública, novo** — `POST /newsletter/subscribe` (seção 13.2), sem autenticação,
+  captura e-mail de visitante (não precisa de conta). Tabela nova `NewsletterSubscriber`.
+
 ---
 
 ## 1. Convenções gerais
@@ -126,8 +152,15 @@ o comportamento antigo, pré-Resend/pré-SuperFrete — já corrigido).
 | `FRONTEND_URL` | monta o link de `/redefinir-senha?token=...` no e-mail de reset | sim, se for usar o fluxo de reset por e-mail |
 | `RESEND_API_KEY`, `MAIL_FROM` | envio de e-mail transacional (Resend) | não — sem ela, e-mails só logam um warning e não bloqueiam nada |
 | `PAYMENT_WEBHOOK_SECRET` | valida `X-Webhook-Secret`/`asaas-access-token` no webhook | sim, se for usar Asaas de verdade |
-| `ASAAS_API_URL` | só a URL base (sandbox/produção) | não (default sandbox) |
-| `SUPERFRETE_API_URL` | só a URL base (sandbox/produção) | não (default sandbox) |
+| `ASAAS_API_URL` | só a URL base (sandbox/produção) | não (default **produção**, `https://api.asaas.com/v3`) |
+| `SUPERFRETE_API_URL` | só a URL base (sandbox/produção) | não (default **produção**, `https://api.superfrete.com`) |
+| `INSTAGRAM_APP_SECRET` | troca/renova o token do feed do Instagram por um long-lived (seção 13.1) | não — sem ela, usa o token colado como está (expira em ~1h se for short-lived) |
+
+**Atenção, mudou**: `ASAAS_API_URL`/`SUPERFRETE_API_URL` faziam default pro sandbox antes; agora o
+default é produção. Só configure essas env vars pra usar o sandbox — e nesse caso a chave/token em
+`StoreSettings.integrations` também precisam ser os de sandbox (os ambientes são totalmente
+separados; chave de um lado batendo na URL do outro → `401`/erro "chave não pertence a este
+ambiente").
 
 **Pegadinha**: `ASAAS_API_KEY` **não existe mais como env var** — nem `SUPERFRETE_TOKEN`. A chave
 do Asaas e o token da SuperFrete moram em `StoreSettings.integrations` (banco), configuráveis só
@@ -154,6 +187,11 @@ boas-vindas (`signupPromotion`, seção 13) — não é mais env var, é `StoreS
   ```
   `401` → `UNAUTHENTICATED`, `403` → `FORBIDDEN`, `404` → `NOT_FOUND`, `409` → `CONFLICT`,
   `422` → `VALIDATION_ERROR` (ou código de negócio específico, listado por endpoint abaixo).
+  **Novo**: erros conhecidos do Prisma também caem nesse formato em vez de vazar um `500` cru —
+  violação de índice único (P2002, ex.: slug duplicado) → `409 CONFLICT` com `errors: {campo:
+  ['Este valor já está em uso.']}`; registro não encontrado (P2025) → `404 NOT_FOUND`; violação de
+  chave estrangeira (P2003/P2014) → `409 CONFLICT`. Isso vale pra qualquer endpoint, não só os
+  documentados explicitamente abaixo com esses códigos.
 - **Paginação** (query `page` [default 1], `pageSize` [default 20, máx 100]):
   ```ts
   { items: T[], total: number, page: number, pageSize: number, totalPages: number } // totalPages = 0 se total===0
@@ -199,8 +237,13 @@ manda um CPF placeholder tipo `11111111111`/`12345678901`, é rejeitado.
 `PublicUser`:
 ```ts
 { id, email, name, phone: string|null, document: string|null, avatarUrl: string|null,
-  birthDate: string|null, emailVerified: boolean, createdAt, updatedAt }
+  birthDate: string|null, emailVerified: boolean, acceptMarketing: boolean, createdAt, updatedAt }
 ```
+
+`UpdateMeDto` (`PATCH /auth/me`): `name?, phone?, document?, avatarUrl?, birthDate?` (mesmas regras
+do `RegisterDto` acima) **+ `acceptMarketing?: boolean`** — único jeito de mudar essa preferência
+depois do cadastro (não existe rota separada tipo `/me/marketing`). Sem enviar o campo, o valor
+atual não muda (comportamento padrão de PATCH parcial).
 
 `GET /auth/signup-promotion` — fonte da verdade é `StoreSettings.signupPromotion` (seção 13, editável
 pelo admin), **não** env var:
@@ -238,7 +281,10 @@ CategoryTreeResponse extends CategoryResponse { children: CategoryTreeResponse[]
 ```
 
 Admin: `admin/categories` — `GET`, `POST` (201), `PUT /:id`, `DELETE /:id` (204, soft-delete via
-`isActive=false`). Todas com `Bearer` + `role=admin`.
+`isActive=false`). Todas com `Bearer` + `role=admin`. `slug` é único: `POST` com um slug que já
+pertence a uma categoria **ativa** → `409 CATEGORY_SLUG_TAKEN`; se pertencer a uma categoria
+**inativa** (soft-deletada), reativa e sobrescreve os dados com o que veio no body, em vez de
+travar num 409 sem saída — reaproveita o slug em vez de exigir um diferente.
 
 ### Marcas (`/brands`, público)
 - `GET /brands` → `{ items: BrandResponse[] }` (sem paginação, sem filtros).
@@ -249,7 +295,8 @@ BrandResponse: { id, slug, name, description: string|null, logo: string|null, we
   isActive, createdAt, updatedAt }
 ```
 
-Admin: `admin/brands` — mesmo padrão CRUD de categorias.
+Admin: `admin/brands` — mesmo padrão CRUD de categorias, incluindo a mesma reativação de slug
+inativo descrita acima (`409 BRAND_SLUG_TAKEN` se o slug pertencer a uma marca ativa).
 
 ### Produtos (`/products`, público, **auth opcional** via Bearer — se logado, popula `isFavorite`)
 
@@ -706,6 +753,7 @@ Mencionado aqui só pra contexto — não precisa de nenhuma implementação no 
   rewards: { enabled: boolean },
   signupPromotion: { enabled: boolean, couponCode: string, discountPercentage: number,
     message: string, expiresAt?: string },
+  homepage: { heroImage: string, campaignImage: string },  // novo — ver seção 13.1/abaixo
   currency: 'BRL',
 }
 ```
@@ -715,13 +763,19 @@ Mencionado aqui só pra contexto — não precisa de nenhuma implementação no 
   e `integrations.superfreteToken` **mascarados** (ver regra abaixo) — nunca vêm em texto puro
   por HTTP.
 - `PUT /admin/settings` — body com qualquer subconjunto de `{ store?, checkout?, shipping?,
-  rewards?, signupPromotion?, currency?, timezone? }` (merge profundo por grupo — só sobrescreve
-  os campos enviados). **`integrations` não faz parte deste body.**
+  rewards?, homepage?, signupPromotion?, currency?, timezone? }` (merge profundo por grupo — só
+  sobrescreve os campos enviados). **`integrations` não faz parte deste body.** `homepage` é novo:
+  `{ heroImage?: string, campaignImage?: string }` — URLs de imagem (normalmente resultado de
+  `POST /admin/uploads`, seção 15) para o banner principal e o banner de campanha da home.
 - `PATCH /admin/settings/integrations` — único jeito de mexer em `integrations`. Body:
   `{ paymentGateway?: string, asaasApiKey?: string, shippingProvider?: string,
-  superfreteToken?: string }` (substituição direta desses 4 campos, sem merge). Resposta:
+  superfreteToken?: string, instagramAccessToken?: string, instagramUserId?: string }`
+  (substituição direta desses campos, sem merge). Resposta:
   `{ paymentGateway, shippingProvider, asaasApiKey: string|undefined /* mascarado */,
-  superfreteToken: string|undefined /* mascarado */, updatedAt }`.
+  superfreteToken: string|undefined /* mascarado */, instagramUserId: string|undefined,
+  instagramAccessToken: string|undefined /* mascarado */, updatedAt }`. Colar um
+  `instagramAccessToken` novo reseta o controle interno de renovação (seção 13.1) — o próximo
+  request ao feed troca esse token por um long-lived antes de usar.
 
 ```ts
 StoreSettings: {
@@ -731,8 +785,11 @@ StoreSettings: {
   shipping: { originZipCode, defaultWeightGrams, defaultWidthCm, defaultHeightCm, defaultLengthCm,
     freeShippingThresholds: { PAC?: number|null, SEDEX?: number|null, EXPRESSA?: number|null } },
   rewards: { enabled: boolean },
+  homepage: { heroImage: string, campaignImage: string },
   signupPromotion: { enabled, couponCode, discountPercentage, message, expiresAt? },
-  integrations: { paymentGateway: string, shippingProvider: string, asaasApiKey?: string, superfreteToken?: string },
+  integrations: { paymentGateway: string, shippingProvider: string, asaasApiKey?: string,
+    superfreteToken?: string, instagramUserId?: string, instagramAccessToken?: string,
+    instagramTokenRefreshedAt?: string /* só leitura — gerenciado pelo backend, ver 13.1 */ },
   currency: 'BRL', timezone: string, updatedAt: string,
 }
 ```
@@ -742,6 +799,33 @@ StoreSettings: {
 `asaas_prod_abc123` → `asaas_****`. Não dá pra recuperar o valor completo por HTTP — se a tela de
 admin precisar confirmar "chave já configurada", use só a presença/ausência do campo, não tente
 mostrar o valor mascarado como se fosse editável.
+
+### 13.1 Feed do Instagram (`/instagram`, público)
+
+- `GET /instagram/feed` → `{ items: InstagramMediaItem[] }` (até 6 itens, mais recentes primeiro).
+  ```ts
+  InstagramMediaItem: { id: string, imageUrl: string, permalink: string, caption?: string }
+  ```
+- Sem `Bearer`, sem paginação. Se `integrations.instagramUserId` não estiver configurado, ou a
+  chamada à Meta falhar por qualquer motivo, devolve `{ items: [] }` (ou o último resultado em
+  cache, se houver) — **nunca lança erro**, o feed é decorativo. Se `items` vier vazio, não
+  renderize a seção "Comunidade" na home.
+- Cache interno de 30min no backend (evita estourar o limite de requisições da Meta) — não
+  precisa (nem adianta) o frontend cachear além do normal do React Query.
+- Configuração é toda feita pelo admin: `instagramUserId`/`instagramAccessToken` via
+  `PATCH /admin/settings/integrations` (acima). O backend cuida sozinho de trocar/renovar o token
+  por um long-lived — o frontend não participa desse fluxo, só lê `GET /instagram/feed`.
+
+### 13.2 Newsletter (`/newsletter`, público)
+
+- `POST /newsletter/subscribe` — Body: `{ email: string }` → `200 { message: string }`.
+- Sem `Bearer` — qualquer visitante pode assinar, não precisa ter conta (isso é intencional e
+  diferente de `User.acceptMarketing`, que é a preferência de quem já tem cadastro, seção 2).
+- **Idempotente**: assinar de novo com o mesmo e-mail não dá erro — sempre `200` com a mesma
+  mensagem de sucesso, mesmo se o e-mail já estiver na lista. `email` inválido → `422
+  VALIDATION_ERROR`.
+- Persistido em `NewsletterSubscriber` (`id, email` único, `createdAt`) — sem rota de listagem
+  admin ainda (se precisar exportar a lista, hoje só direto no banco).
 
 ---
 
@@ -792,6 +876,9 @@ automaticamente (outras transições não mexem em estoque).
 - **Arquivos servidos fora do prefixo `/api/v1`**: a URL retornada é `<host>/uploads/arquivo.ext`,
   não `<host>/api/v1/uploads/arquivo.ext` — não adicione o prefixo da API na hora de exibir a
   imagem.
+- `<host>` vem do próprio request (`req.protocol` + `req.get('host')`, com `trust proxy` ligado no
+  Express) — funciona certo atrás de proxy reverso (Render etc.) sem nenhuma env var de URL base
+  pra manter sincronizada com o domínio real.
 - Storage é **disco local** do servidor (não S3) — em produção isso significa que uploads não
   sobrevivem a um redeploy/restart do container a menos que haja um volume persistente montado;
   vale saber disso antes de depender pesado dessa rota em produção.
@@ -846,6 +933,10 @@ Favoritos       GET /favorites[?...] · GET /favorites/ids · GET /favorites/:pr
 Promoções       GET /promotions[?...] · GET /promotions/:slug · POST /promotions/preview
 
 Recompensas     GET /rewards/tiers · GET /rewards/progress[?eligibleAmount]
+
+Instagram       GET /instagram/feed
+
+Newsletter      POST /newsletter/subscribe
 
 Pedidos         POST /orders · GET /orders[?...] · GET /orders/:id
                 GET /orders/by-number/:orderNumber · POST /orders/:id/cancel

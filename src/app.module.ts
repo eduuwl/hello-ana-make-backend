@@ -19,6 +19,7 @@ import { AdminModule } from './admin/admin.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { HealthModule } from './health/health.module';
 import { InstagramModule } from './instagram/instagram.module';
+import { NewsletterModule } from './newsletter/newsletter.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { InstagramModule } from './instagram/instagram.module';
     AdminModule,
     UploadsModule,
     InstagramModule,
+    NewsletterModule,
   ],
 })
 export class AppModule {}

@@ -1,4 +1,4 @@
-import { IsISO8601, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsISO8601, IsOptional, IsString } from 'class-validator';
 import { IsCpfCnpj } from '../../common/validators/is-cpf-cnpj.validator';
 
 export class UpdateMeDto {
@@ -21,4 +21,8 @@ export class UpdateMeDto {
   @IsOptional()
   @IsISO8601()
   birthDate?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  acceptMarketing?: boolean;
 }

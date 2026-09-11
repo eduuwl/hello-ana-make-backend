@@ -71,7 +71,7 @@ export const DEFAULT_STORE_SETTINGS: Omit<StoreSettings, 'updatedAt'> = {
   store: {
     name: 'Hello Ana Make',
     email: 'contato@helloanamake.com',
-    phone: '11999990000',
+    phone: '91981136250',
     instagramUrl: 'https://instagram.com/helloanamake',
   },
   checkout: {
@@ -81,7 +81,7 @@ export const DEFAULT_STORE_SETTINGS: Omit<StoreSettings, 'updatedAt'> = {
     allowGuestCheckout: false,
   },
   shipping: {
-    originZipCode: '01310100',
+    originZipCode: '66050350',
     defaultWeightGrams: 200,
     defaultWidthCm: 16,
     defaultHeightCm: 10,

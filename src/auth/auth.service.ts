@@ -129,6 +129,7 @@ export class AuthService {
         document: dto.document,
         avatarUrl: dto.avatarUrl,
         birthDate: dto.birthDate ? new Date(dto.birthDate) : undefined,
+        acceptMarketing: dto.acceptMarketing,
       },
     });
     return toPublicUser(user);
