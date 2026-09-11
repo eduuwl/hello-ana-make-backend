@@ -77,6 +77,23 @@ export class MailService {
     });
   }
 
+  async sendNewsletterConfirmation(to: string): Promise<void> {
+    await this.send({
+      to,
+      subject: 'Inscrição confirmada — Hello Ana Make',
+      html: `
+        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+          <h2 style="color: #2D2027;">Você está na lista! 💌</h2>
+          <p>Sua inscrição na newsletter da Hello Ana Make foi confirmada — a partir de agora
+          você recebe lançamentos, tutoriais e cupons exclusivos em primeira mão.</p>
+          <p style="color: #888; font-size: 12px;">
+            Não pediu essa inscrição? Só ignorar este e-mail — você não será inscrita de novo.
+          </p>
+        </div>
+      `,
+    });
+  }
+
   async sendOrderConfirmation(
     to: string,
     input: { orderNumber: string; total: string; itemsHtml: string },

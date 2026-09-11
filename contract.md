@@ -826,6 +826,9 @@ mostrar o valor mascarado como se fosse editável.
   VALIDATION_ERROR`.
 - Persistido em `NewsletterSubscriber` (`id, email` único, `createdAt`) — sem rota de listagem
   admin ainda (se precisar exportar a lista, hoje só direto no banco).
+- Dispara um e-mail de confirmação via `MailService` (fire-and-forget do ponto de vista do
+  frontend, mas `await`ado aqui dentro — mesmo assim nunca lança: sem `RESEND_API_KEY`
+  configurada, só loga e a resposta `200` sai normal).
 
 ---
 
